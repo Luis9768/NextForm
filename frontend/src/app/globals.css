@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 6% 7%;
+    --card-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+  }
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+/* Impede quebra vertical de texto em botões, links de ação e badges de altura fixa */
+button.h-7,
+button.h-8,
+button.h-9,
+button.h-10,
+button.h-11,
+a.h-7,
+a.h-8,
+a.h-9,
+a.h-10,
+a.h-11,
+span.rounded-full {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Customização sutil de scrollbars no tema Shadcn Neutral Dark */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(82, 82, 91, 0.45);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.7);
+}
+
+/* Shadcn Neutral Dark Card Surface */
+.shadcn-kpi-card {
+  background: linear-gradient(
+    180deg,
+    rgba(24, 24, 27, 0.65) 0%,
+    rgba(9, 9, 11, 0.9) 100%
+  );
+}
+
+html:not(.dark) .shadcn-kpi-card {
+  background: #ffffff;
+}
+
+/* Adaptação de superfícies internas no modo escuro neutro */
+.dark main .bg-white,
+.dark main .dark\:bg-slate-900 {
+  background-color: #101012 !important;
+}
+
+.dark main .bg-slate-50,
+.dark main .dark\:bg-slate-950 {
+  background-color: #09090b !important;
+}
+
+.dark main .border-slate-200,
+.dark main .border-slate-300,
+.dark main .dark\:border-slate-800,
+.dark main .dark\:border-slate-700 {
+  border-color: #27272a !important;
+}
+
+.dark main .divide-slate-200 > :not([hidden]) ~ :not([hidden]),
+.dark main .dark\:divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #27272a !important;
+}
+
+.dark main .text-slate-900,
+.dark main .text-slate-800 {
+  color: #fafafa !important;
+}
+
+.dark main .text-slate-700,
+.dark main .text-slate-600 {
+  color: #a1a1aa !important;
+}
+
+.dark main .text-slate-500,
+.dark main .text-slate-400 {
+  color: #71717a !important;
+}
