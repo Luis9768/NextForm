@@ -66,4 +66,14 @@ public class CallRecordController {
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
+
+    @PatchMapping("/by-external/{externalCallId}/duration")
+    @Operation(summary = "Atualiza a duração real detectada pelo player de áudio na gravação")
+    public ResponseEntity<Void> updateDetectedDuration(
+            @PathVariable String externalCallId,
+            @RequestParam("durationSeconds") int durationSeconds
+    ) {
+        callRecordService.updateCallDurationByExternalId(externalCallId, durationSeconds);
+        return ResponseEntity.noContent().build();
+    }
 }

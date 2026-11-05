@@ -29,6 +29,9 @@ export default function EvaluationDetailPage() {
   const evalId = params.id;
   const router = useRouter();
   const { isAnalista } = useAuth();
+  const [detectedAudioDuration, setDetectedAudioDuration] = React.useState<
+    number | null
+  >(null);
 
   const {
     data: evaluation,
@@ -177,7 +180,10 @@ export default function EvaluationDetailPage() {
                 <span>
                   Duração da Ligação:{" "}
                   <strong className="text-zinc-200 font-mono">
-                    {formatDuration(evaluation.callRecord.durationSeconds)}
+                    {formatDuration(
+                      detectedAudioDuration ??
+                        evaluation.callRecord.durationSeconds
+                    )}
                   </strong>
                 </span>
               </div>
@@ -215,7 +221,10 @@ export default function EvaluationDetailPage() {
           <CallAudioPlayer
             audioUrl={evaluation.callRecord.audioUrl}
             externalCallId={evaluation.callRecord.externalCallId}
-            durationSeconds={evaluation.callRecord.durationSeconds}
+            durationSeconds={
+              detectedAudioDuration ?? evaluation.callRecord.durationSeconds
+            }
+            onDurationDetected={setDetectedAudioDuration}
           />
         </div>
 

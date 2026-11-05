@@ -11,13 +11,14 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { API_BASE_URL } from "@/lib/api";
+import { API_BASE_URL, callsApi } from "@/lib/api";
 import { formatDuration } from "@/lib/utils";
 
 interface CallAudioPlayerProps {
   audioUrl: string;
   externalCallId: string;
   durationSeconds?: number;
+  onDurationDetected?: (seconds: number) => void;
 }
 
 const SPEED_OPTIONS = [0.75, 1, 1.25, 1.5, 2];
@@ -26,6 +27,7 @@ export function CallAudioPlayer({
   audioUrl,
   externalCallId,
   durationSeconds = 30,
+  onDurationDetected,
 }: CallAudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -153,8 +155,18 @@ export function CallAudioPlayer({
         onLoadedMetadata={(e) => {
           const el = e.currentTarget;
           if (el.duration && isFinite(el.duration) && el.duration > 0) {
-            setDuration(Math.round(el.duration));
+            const realSecs = Math.round(el.duration);
+            setDuration(realSecs);
             setAudioUnavailable(false);
+            onDurationDetected?.(realSecs);
+            if (
+              externalCallId &&
+              Math.abs(realSecs - (durationSeconds || 0)) > 2
+            ) {
+              callsApi
+                .syncDetectedDuration(externalCallId, realSecs)
+                .catch(() => {});
+            }
           }
         }}
         onTimeUpdate={(e) => {

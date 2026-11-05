@@ -47,6 +47,31 @@ public record CallRecordResponse(
         }
         Evaluation eval = callRecord.getEvaluation();
         Map<String, Object> rawMeta = callRecord.getMetadata();
+        Integer resolvedDuration = callRecord.getDurationSeconds();
+        if ((resolvedDuration == null || resolvedDuration == 210) && rawMeta != null) {
+            Object trObj = rawMeta.get("transcricao");
+            if (trObj instanceof String tr && !tr.isBlank()) {
+                java.util.regex.Matcher mTime = java.util.regex.Pattern
+                        .compile("\\[(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\]")
+                        .matcher(tr);
+                int maxSecs = 0;
+                while (mTime.find()) {
+                    try {
+                        int p1 = Integer.parseInt(mTime.group(1));
+                        int p2 = Integer.parseInt(mTime.group(2));
+                        String g3 = mTime.group(3);
+                        int s = (g3 != null) ? (p1 * 3600 + p2 * 60 + Integer.parseInt(g3)) : (p1 * 60 + p2);
+                        if (s > maxSecs && s <= 7200) {
+                            maxSecs = s;
+                        }
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                if (maxSecs >= 10) {
+                    resolvedDuration = maxSecs;
+                }
+            }
+        }
         Map<String, Object> finalMeta = rawMeta;
         if (omitLargeTranscript && rawMeta != null && rawMeta.containsKey("transcricao")) {
             finalMeta = new LinkedHashMap<>(rawMeta);
@@ -59,7 +84,7 @@ public record CallRecordResponse(
                 CustomerDto.fromEntity(callRecord.getCustomer()),
                 callRecord.getCustomerIdentifier(),
                 callRecord.getCallDate(),
-                callRecord.getDurationSeconds(),
+                resolvedDuration,
                 callRecord.getAudioUrl(),
                 callRecord.getStatus(),
                 callRecord.getChannel(),

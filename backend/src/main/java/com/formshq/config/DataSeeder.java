@@ -75,6 +75,13 @@ public class DataSeeder implements CommandLineRunner {
             ensureBootstrapEnvAdmin();
             java.util.concurrent.CompletableFuture.runAsync(() -> {
                 try {
+                    directusEvaluationSyncService.repairLocalDatabaseRecords();
+                    log.info("Reparo local de durações e limpeza de registros corrompidos concluído.");
+                } catch (Exception e) {
+                    log.warn("Aviso no reparo local de registros: {}", e.getMessage());
+                }
+
+                try {
                     var userResult = directusEvaluationSyncService.syncUsersAndPurgeFictionalData(null, null);
                     log.info("Sincronização inicial de Usuários Directus concluída: {} usuários reais ativos, {} fictícios removidos.",
                             userResult.syncedUsersCount(), userResult.purgedFictionalUsers());

@@ -257,6 +257,16 @@ export const callsApi = {
     });
     return data;
   },
+  syncDetectedDuration: async (
+    externalCallId: string,
+    durationSeconds: number
+  ): Promise<void> => {
+    await api.patch(
+      `/calls/by-external/${encodeURIComponent(externalCallId)}/duration`,
+      null,
+      { params: { durationSeconds } }
+    );
+  },
 };
 
 export const formsApi = {

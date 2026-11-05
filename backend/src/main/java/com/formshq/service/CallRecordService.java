@@ -322,6 +322,23 @@ public class CallRecordService {
         return CallRecordResponse.fromEntity(callRecord);
     }
 
+    @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
+    public void updateCallDurationByExternalId(String externalCallId, int durationSeconds) {
+        if (externalCallId == null || externalCallId.isBlank() || durationSeconds <= 0 || durationSeconds > 14400) {
+            return;
+        }
+        callRecordRepository.findByExternalCallId(externalCallId.trim()).ifPresent(call -> {
+            if (call.getDurationSeconds() == null || Math.abs(call.getDurationSeconds() - durationSeconds) > 2) {
+                call.setDurationSeconds(durationSeconds);
+                callRecordRepository.save(call);
+            }
+        });
+    }
+
     private Customer provisionCustomerFromWebhook(String phone) {
         int hash = phone.hashCode() & 0x7fffffff;
         String cpf = String.format("%03d.%03d.%03d-%02d",

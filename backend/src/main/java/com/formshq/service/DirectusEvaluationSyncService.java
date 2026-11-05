@@ -74,7 +74,7 @@ public class DirectusEvaluationSyncService {
             PasswordEncoder passwordEncoder,
             ObjectMapper objectMapper,
             DemoAudioService demoAudioService,
-            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String configuredDirectusBaseUrl,
+            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}") String configuredDirectusBaseUrl,
             @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String configuredDirectusToken,
             @Value("${app.security.bootstrap-admin.email:}") String bootstrapAdminEmail
     ) {
@@ -92,6 +92,61 @@ public class DirectusEvaluationSyncService {
         this.configuredDirectusBaseUrl = configuredDirectusBaseUrl;
         this.configuredDirectusToken = configuredDirectusToken;
         this.bootstrapAdminEmail = bootstrapAdminEmail;
+    }
+
+    /**
+     * Repara imediatamente no banco local todas as ligações com duração legada 210s (03:30)
+     * e remove registros corrompidos de 05/11 (15:10 e 16:27), sem depender de chamada externa.
+     */
+    @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
+    public void repairLocalDatabaseRecords() {
+        List<Evaluation> allEvals = evaluationRepository.findAll();
+        for (Evaluation ev : allEvals) {
+            CallRecord cr = ev.getCallRecord();
+            if (cr == null) continue;
+            String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
+            String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
+            String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null ? cr.getCustomer().getName() : "";
+            if (callDateStr.startsWith("2026-11-05T18:")
+                    || callDateStr.startsWith("2026-11-05T19:")
+                    || "Undefined".equalsIgnoreCase(custName)
+                    || audioUrl.contains(".wav?duration=")
+                    || audioUrl.contains("sem-audio-")) {
+                cr.setEvaluation(null);
+                callRecordRepository.save(cr);
+                evaluationRepository.delete(ev);
+            }
+        }
+        evaluationRepository.flush();
+
+        List<CallRecord> allCalls = callRecordRepository.findAll();
+        for (CallRecord cr : allCalls) {
+            String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
+            String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
+            String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null ? cr.getCustomer().getName() : "";
+            if (callDateStr.startsWith("2026-11-05T18:")
+                    || callDateStr.startsWith("2026-11-05T19:")
+                    || "Undefined".equalsIgnoreCase(custName)
+                    || audioUrl.contains(".wav?duration=")
+                    || audioUrl.contains("sem-audio-")) {
+                callRecordRepository.delete(cr);
+                continue;
+            }
+
+            if (cr.getDurationSeconds() == null || cr.getDurationSeconds() == 210) {
+                Map<String, Object> meta = cr.getMetadata();
+                int newDuration = extractCallDurationSeconds(meta != null ? meta : Map.of(), cr.getExternalCallId());
+                if (newDuration != 210) {
+                    cr.setDurationSeconds(newDuration);
+                    callRecordRepository.save(cr);
+                }
+            }
+        }
+        callRecordRepository.flush();
     }
 
     /**
@@ -1867,8 +1922,11 @@ public class DirectusEvaluationSyncService {
 
     @SuppressWarnings("unchecked")
     private int extractCallDurationSeconds(Map<String, Object> item, String directusId) {
-        // 1. Se houver Transcricao com marcações de tempo [MM:SS] ou [HH:MM:SS], extrai o último timestamp real da conversa
-        String transcricao = extractString(item, "Transcricao", null);
+        // 1. Se houver Transcricao/transcricao com marcações de tempo [MM:SS] ou [HH:MM:SS], extrai o último timestamp real da conversa
+        String transcricao = firstNonBlank(
+                extractString(item, "Transcricao", null),
+                extractString(item, "transcricao", null)
+        );
         if (transcricao != null && !transcricao.isBlank()) {
             java.util.regex.Matcher mTime = java.util.regex.Pattern
                     .compile("\\[(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\]")

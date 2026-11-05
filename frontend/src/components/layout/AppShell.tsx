@@ -114,6 +114,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [analystSidebarSearch, setAnalystSidebarSearch] = useState("");
 
   const [activeModule, setActiveModule] = useState<RailModuleKey>(() =>
     inferModuleFromRoute(pathname, currentSection, currentLayout)
@@ -633,29 +634,60 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 <p className="px-2.5 mb-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
                   Avaliar Analista ({analysts.length})
                 </p>
-                <nav className="space-y-0.5">
-                  {analysts.map((analyst) => {
-                    const href = `/analysts/${analyst.id}`;
-                    const active = pathname === href;
-                    return (
-                      <Link
-                        key={analyst.id}
-                        href={href}
-                        onClick={() => setMobileMenuOpen(false)}
-                        className={cn(
-                          "flex items-center justify-between gap-2 px-2.5 py-2 md:py-1.5 rounded-lg text-xs transition-colors",
-                          active
-                            ? "bg-zinc-800/90 text-zinc-50 font-semibold"
-                            : "text-zinc-400 hover:bg-zinc-900/80 hover:text-zinc-100"
-                        )}
+                <div className="px-1.5 mb-2">
+                  <div className="relative">
+                    <Search className="h-3 w-3 text-zinc-500 absolute left-2.5 top-2" />
+                    <input
+                      type="text"
+                      value={analystSidebarSearch}
+                      onChange={(e) => setAnalystSidebarSearch(e.target.value)}
+                      placeholder="Buscar analista..."
+                      className="w-full h-7 pl-7 pr-6 rounded-md border border-zinc-800 bg-[#09090b] text-[11px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-600"
+                    />
+                    {analystSidebarSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setAnalystSidebarSearch("")}
+                        className="absolute right-2 top-1.5 text-zinc-500 hover:text-zinc-200"
                       >
-                        <span className="flex items-center gap-2 min-w-0">
-                          <UserCheck className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                          <span className="truncate">{analyst.name}</span>
-                        </span>
-                      </Link>
-                    );
-                  })}
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <nav className="space-y-0.5">
+                  {analysts
+                    .filter((a) => {
+                      const q = analystSidebarSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return (
+                        a.name.toLowerCase().includes(q) ||
+                        a.email.toLowerCase().includes(q) ||
+                        (a.department && a.department.toLowerCase().includes(q))
+                      );
+                    })
+                    .map((analyst) => {
+                      const href = `/analysts/${analyst.id}`;
+                      const active = pathname === href;
+                      return (
+                        <Link
+                          key={analyst.id}
+                          href={href}
+                          onClick={() => setMobileMenuOpen(false)}
+                          className={cn(
+                            "flex items-center justify-between gap-2 px-2.5 py-2 md:py-1.5 rounded-lg text-xs transition-colors",
+                            active
+                              ? "bg-zinc-800/90 text-zinc-50 font-semibold"
+                              : "text-zinc-400 hover:bg-zinc-900/80 hover:text-zinc-100"
+                          )}
+                        >
+                          <span className="flex items-center gap-2 min-w-0">
+                            <UserCheck className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                            <span className="truncate">{analyst.name}</span>
+                          </span>
+                        </Link>
+                      );
+                    })}
                 </nav>
               </div>
             </div>
