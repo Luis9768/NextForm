@@ -36,6 +36,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       postgres:
@@ -90,6 +91,7 @@ services:
         INTERNAL_BACKEND_URL: http://backend:8080
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
         NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL: ${NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL:-}
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       - backend
