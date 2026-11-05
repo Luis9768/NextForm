@@ -1,6 +1,7 @@
 package com.formshq.service;
 
 import com.formshq.exception.BusinessRuleException;
+import com.formshq.exception.ResourceNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
@@ -26,14 +27,14 @@ import java.util.Arrays;
 @Service
 public class DemoAudioService {
 
-    private static final int MAX_RANGE_CHUNK_BYTES = 2 * 1024 * 1024; // 2 MB por fatia Range
+    private static final int MAX_RANGE_CHUNK_BYTES = 32 * 1024 * 1024; // 32 MB para suportar gravações WAV/MP3 completas sem truncar blocos ADPCM
 
     private final String directusBaseUrl;
     private final String directusApiToken;
     private final R2ObjectStorageService r2ObjectStorageService;
 
     public DemoAudioService(
-            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String directusBaseUrl,
+            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}") String directusBaseUrl,
             @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String directusApiToken,
             R2ObjectStorageService r2ObjectStorageService
     ) {
@@ -119,10 +120,10 @@ public class DemoAudioService {
                 }
             }
         } catch (Exception e) {
-            log.warn("Não foi possível baixar o áudio real {} do Directus ({}). Usando fallback sintético.", fileId, e.getMessage());
+            log.warn("Não foi possível baixar o áudio real {} do Directus: {}", fileId, e.getMessage());
         }
 
-        return resolveSynthesizedAudioSlice(fileId, 32, rangeHeader);
+        throw new ResourceNotFoundException("Gravação original não encontrada no armazenamento do Directus para o arquivo " + fileId);
     }
 
     public AudioStreamSlice resolveUploadedFileAudioSlice(String fileName, String rangeHeader) {
@@ -165,7 +166,7 @@ public class DemoAudioService {
 
             boolean isPartial = rangeHeader != null && rangeHeader.startsWith("bytes=");
             int start = 0;
-            int end = Math.min(totalLength - 1, MAX_RANGE_CHUNK_BYTES - 1);
+            int end = totalLength - 1;
 
             if (isPartial) {
                 String rangeValue = rangeHeader.substring("bytes=".length());
@@ -179,8 +180,6 @@ public class DemoAudioService {
                 if (start < 0 || start >= totalLength || start > end) {
                     return new AudioStreamSlice(new byte[0], contentType, totalLength, start, end, false, true);
                 }
-            } else {
-                end = Math.min(totalLength - 1, MAX_RANGE_CHUNK_BYTES - 1);
             }
 
             int sliceLength = end - start + 1;

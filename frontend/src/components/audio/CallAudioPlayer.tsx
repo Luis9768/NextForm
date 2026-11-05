@@ -35,6 +35,13 @@ export function CallAudioPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(0.9);
   const [usingFallbackStream, setUsingFallbackStream] = useState(false);
+  const [audioUnavailable, setAudioUnavailable] = useState(false);
+
+  const isDirectusAudio =
+    Boolean(audioUrl) &&
+    (audioUrl.includes("/audio/directus/") ||
+      audioUrl.includes("crm-directus") ||
+      (externalCallId && externalCallId.startsWith("directus_")));
 
   const fallbackStreamUrl = `${API_BASE_URL}/audio/${encodeURIComponent(
     externalCallId || "call_demo"
@@ -56,19 +63,21 @@ export function CallAudioPlayer({
   })();
 
   const effectiveSrc =
-    usingFallbackStream || isMockExternalHost
+    !isDirectusAudio && (usingFallbackStream || isMockExternalHost)
       ? fallbackStreamUrl
       : resolvedAudioUrl;
 
   useEffect(() => {
     setIsPlaying(false);
     setCurrentTime(0);
+    setDuration(durationSeconds || 30);
     setUsingFallbackStream(false);
-  }, [audioUrl, externalCallId]);
+    setAudioUnavailable(false);
+  }, [audioUrl, externalCallId, durationSeconds]);
 
   const togglePlay = async () => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || audioUnavailable) return;
     try {
       if (isPlaying) {
         audio.pause();
@@ -78,7 +87,10 @@ export function CallAudioPlayer({
         setIsPlaying(true);
       }
     } catch {
-      if (!usingFallbackStream) {
+      if (isDirectusAudio) {
+        setAudioUnavailable(true);
+        setIsPlaying(false);
+      } else if (!usingFallbackStream) {
         setUsingFallbackStream(true);
       }
     }
@@ -140,8 +152,9 @@ export function CallAudioPlayer({
         preload="metadata"
         onLoadedMetadata={(e) => {
           const el = e.currentTarget;
-          if (el.duration && isFinite(el.duration)) {
-            setDuration(el.duration);
+          if (el.duration && isFinite(el.duration) && el.duration > 0) {
+            setDuration(Math.round(el.duration));
+            setAudioUnavailable(false);
           }
         }}
         onTimeUpdate={(e) => {
@@ -149,11 +162,20 @@ export function CallAudioPlayer({
         }}
         onEnded={() => setIsPlaying(false)}
         onError={() => {
-          if (!usingFallbackStream) {
+          if (isDirectusAudio) {
+            setAudioUnavailable(true);
+            setIsPlaying(false);
+          } else if (!usingFallbackStream) {
             setUsingFallbackStream(true);
           }
         }}
       />
+
+      {audioUnavailable && (
+        <div className="px-2.5 py-1.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-[11px] text-amber-300 font-medium">
+          Arquivo de áudio histórico ausente no armazenamento local do servidor Directus de origem.
+        </div>
+      )}
 
       {/* Linha 1: Controles Principais + Identificação + Velocidade/Volume */}
       <div className="flex flex-wrap items-center justify-between gap-2.5">

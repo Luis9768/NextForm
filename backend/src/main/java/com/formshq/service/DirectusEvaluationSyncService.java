@@ -595,11 +595,6 @@ public class DirectusEvaluationSyncService {
                 String directusId = extractString(item, "id", UUID.randomUUID().toString().substring(0, 8));
                 String externalCallId = buildDeterministicExternalCallId(collection, directusId);
 
-                if (callRecordRepository.existsByExternalCallId(externalCallId)) {
-                    skippedDuplicates++;
-                    continue;
-                }
-
                 EvaluationFormTemplate template = templatesByCollection.get(collection);
                 if (template == null) {
                     warnings.add("Template não encontrado para a collection: " + collection);
@@ -608,23 +603,23 @@ public class DirectusEvaluationSyncService {
                 }
 
                 String targetSector = resolveSectorForCollection(collection, template);
-                User evaluator = resolveOrProvisionEvaluator(item.get("user_created"), targetSector, fallbackEvaluator);
-                User analyst = resolveOrProvisionAnalyst(
-                        item.get("Operador"),
-                        extractString(item, "Transcricao", null),
-                        targetSector,
-                        evaluator,
-                        provisionedAnalysts
-                );
                 Customer customer = resolveOrProvisionCustomer(collection, item, directusId);
-                OffsetDateTime callDate = parseDirectusDate(
-                        firstNonNull(item.get("Data_do_Atendimento"), item.get("Data_da_venda"), item.get("date_created"))
+                OffsetDateTime callDate = resolveValidDirectusDate(
+                        item.get("date_created"),
+                        extractAudioCreatedOn(item),
+                        item.get("Data_do_Atendimento"),
+                        item.get("Data_da_venda"),
+                        item.get("Data_monitoria")
                 );
-                OffsetDateTime evaluatedAt = parseDirectusDate(
-                        firstNonNull(item.get("Data_monitoria"), item.get("date_created"), callDate)
+                OffsetDateTime evaluatedAt = resolveValidDirectusDate(
+                        item.get("date_created"),
+                        item.get("Data_monitoria"),
+                        callDate
                 );
 
+                int durationSeconds = extractCallDurationSeconds(item, directusId);
                 String audioUuid = extractAudioUuid(item);
+                String returnAudioUuid = extractReturnAudioUuid(item);
                 String audioUrl = resolvePlayableAudioUrl(audioUuid, externalCallId);
 
                 Map<String, Object> metadata = new LinkedHashMap<>();
@@ -637,6 +632,10 @@ public class DirectusEvaluationSyncService {
                         metadata.put("directusAssetUrl", directusBaseUrl.replaceAll("/+$", "") + "/assets/" + audioUuid);
                     }
                 }
+                if (returnAudioUuid != null) {
+                    metadata.put("returnAudioFileId", returnAudioUuid);
+                    metadata.put("returnAudioUrl", "/api/v1/audio/directus/" + returnAudioUuid);
+                }
                 String ticket = extractString(item, "Ticket", null);
                 if (ticket != null) {
                     metadata.put("ticket", ticket);
@@ -646,13 +645,42 @@ public class DirectusEvaluationSyncService {
                     metadata.put("transcricao", transcricao);
                 }
 
+                Optional<CallRecord> existingCallOpt = callRecordRepository.findByExternalCallId(externalCallId);
+                if (existingCallOpt.isPresent()) {
+                    CallRecord existingCall = existingCallOpt.get();
+                    existingCall.setCustomer(customer);
+                    existingCall.setCustomerIdentifier(customer.getPhone());
+                    existingCall.setCallDate(callDate);
+                    existingCall.setDurationSeconds(durationSeconds);
+                    existingCall.setAudioUrl(audioUrl);
+                    existingCall.setMetadata(metadata);
+                    if (existingCall.getEvaluation() != null) {
+                        Evaluation existingEval = existingCall.getEvaluation();
+                        existingEval.setEvaluatedAt(evaluatedAt);
+                        existingEval.setCreatedAt(evaluatedAt);
+                        evaluationRepository.save(existingEval);
+                    }
+                    callRecordRepository.save(existingCall);
+                    skippedDuplicates++;
+                    continue;
+                }
+
+                User evaluator = resolveOrProvisionEvaluator(item.get("user_created"), targetSector, fallbackEvaluator);
+                User analyst = resolveOrProvisionAnalyst(
+                        item.get("Operador"),
+                        transcricao,
+                        targetSector,
+                        evaluator,
+                        provisionedAnalysts
+                );
+
                 CallRecord callRecord = CallRecord.builder()
                         .externalCallId(externalCallId)
                         .analyst(analyst)
                         .customer(customer)
                         .customerIdentifier(customer.getPhone())
                         .callDate(callDate)
-                        .durationSeconds(210)
+                        .durationSeconds(durationSeconds)
                         .audioUrl(audioUrl)
                         .status(CallStatus.AVALIADA)
                         .channel("directus-sync")
@@ -1326,35 +1354,39 @@ public class DirectusEvaluationSyncService {
 
         String protocol = firstNonBlank(proposta, ticket, "DIR-" + collection.toUpperCase() + "-" + directusId);
 
+        String defaultName = rawPhone != null ? "Cliente Portabilidade " + cleanPhone : "Cliente Ticket " + protocol;
+        String defaultEmail = "cliente." + cleanPhone + "@directus.com.br";
+        String defaultPlan = COL_AQUISICAO.equalsIgnoreCase(collection) ? "TIM Controle Smart / Plus" : "Plano Assistencial";
+
         return customerRepository.findByPhone(cleanPhone)
                 .map(existing -> {
-                    if (nome != null) existing.setName(formatTitleCase(nome));
-                    if (cpf != null) existing.setDocument(cpf);
-                    if (email != null) existing.setEmail(email);
-                    if (protocol != null) existing.setProtocol(protocol);
-                    if (proposta != null) existing.setProposal(proposta);
-                    if (saleDate != null) existing.setSaleDate(saleDate);
-                    if (nascimento != null) existing.setBirthDate(nascimento);
-                    if (nomeMae != null) existing.setMotherName(formatTitleCase(nomeMae));
-                    if (plano != null) existing.setContractedPlan(plano);
-                    if (formaPagamento != null) existing.setPaymentMethod(formaPagamento);
-                    if (tipoFatura != null) existing.setInvoiceType(tipoFatura);
-                    if (endereco != null) existing.setFullAddress(endereco);
-                    if (vencimento != null) existing.setDueDate(vencimento);
-                    if (portAntecipada != null) existing.setEarlyPortability(portAntecipada);
+                    existing.setName(nome != null ? formatTitleCase(nome) : (isPlaceholderValue(existing.getName()) ? defaultName : existing.getName()));
+                    existing.setDocument(cpf != null ? cpf : (isPlaceholderValue(existing.getDocument()) ? "000.000.000-00" : existing.getDocument()));
+                    existing.setEmail(email != null ? email : (isPlaceholderValue(existing.getEmail()) ? defaultEmail : existing.getEmail()));
+                    existing.setProtocol(protocol != null ? protocol : existing.getProtocol());
+                    existing.setProposal(proposta != null ? proposta : (isPlaceholderValue(existing.getProposal()) ? null : existing.getProposal()));
+                    existing.setSaleDate(saleDate != null ? saleDate : (isPlaceholderValue(existing.getSaleDate()) ? null : existing.getSaleDate()));
+                    existing.setBirthDate(nascimento != null ? nascimento : (isPlaceholderValue(existing.getBirthDate()) ? null : existing.getBirthDate()));
+                    existing.setMotherName(nomeMae != null ? formatTitleCase(nomeMae) : (isPlaceholderValue(existing.getMotherName()) ? null : existing.getMotherName()));
+                    existing.setContractedPlan(plano != null ? plano : (isPlaceholderValue(existing.getContractedPlan()) ? defaultPlan : existing.getContractedPlan()));
+                    existing.setPaymentMethod(formaPagamento != null ? formaPagamento : (isPlaceholderValue(existing.getPaymentMethod()) ? null : existing.getPaymentMethod()));
+                    existing.setInvoiceType(tipoFatura != null ? tipoFatura : (isPlaceholderValue(existing.getInvoiceType()) ? null : existing.getInvoiceType()));
+                    existing.setFullAddress(endereco != null ? endereco : (isPlaceholderValue(existing.getFullAddress()) ? null : existing.getFullAddress()));
+                    existing.setDueDate(vencimento != null ? vencimento : (isPlaceholderValue(existing.getDueDate()) ? null : existing.getDueDate()));
+                    existing.setEarlyPortability(portAntecipada != null ? portAntecipada : (isPlaceholderValue(existing.getEarlyPortability()) ? null : existing.getEarlyPortability()));
                     return customerRepository.save(existing);
                 })
                 .orElseGet(() -> customerRepository.save(Customer.builder()
                         .phone(cleanPhone)
-                        .name(nome != null ? formatTitleCase(nome) : (rawPhone != null ? "Cliente Portabilidade " + cleanPhone : "Cliente Ticket " + protocol))
+                        .name(nome != null ? formatTitleCase(nome) : defaultName)
                         .document(cpf != null ? cpf : "000.000.000-00")
-                        .email(email != null ? email : ("cliente." + cleanPhone + "@directus.com.br"))
+                        .email(email != null ? email : defaultEmail)
                         .protocol(protocol)
                         .proposal(proposta)
                         .saleDate(saleDate)
                         .birthDate(nascimento)
                         .motherName(nomeMae != null ? formatTitleCase(nomeMae) : null)
-                        .contractedPlan(plano != null ? plano : (COL_AQUISICAO.equalsIgnoreCase(collection) ? "TIM Controle Smart / Plus" : "Plano Assistencial"))
+                        .contractedPlan(plano != null ? plano : defaultPlan)
                         .paymentMethod(formaPagamento)
                         .invoiceType(tipoFatura)
                         .fullAddress(endereco)
@@ -1514,7 +1546,7 @@ public class DirectusEvaluationSyncService {
                 item.get("Ligacao")
         );
         for (Object candidate : candidates) {
-            if (candidate instanceof String s && s.length() >= 10) {
+            if (candidate instanceof String s && s.length() >= 10 && !isPlaceholderValue(s)) {
                 return s.trim();
             }
             if (candidate instanceof Map<?, ?> map) {
@@ -1532,6 +1564,101 @@ public class DirectusEvaluationSyncService {
         return null;
     }
 
+    @SuppressWarnings("unchecked")
+    private String extractReturnAudioUuid(Map<String, Object> item) {
+        List<Object> candidates = Arrays.asList(
+                item.get("Ligacao_Retorno"),
+                item.get("Audio_Ligacao_Retorno"),
+                item.get("audio_chamada_retorno")
+        );
+        for (Object candidate : candidates) {
+            if (candidate instanceof String s && s.length() >= 10 && !isPlaceholderValue(s)) {
+                return s.trim();
+            }
+            if (candidate instanceof Map<?, ?> map) {
+                Map<String, Object> m = (Map<String, Object>) map;
+                String id = extractString(m, "id", null);
+                if (id != null && id.length() >= 10) {
+                    return id;
+                }
+                String source = extractString(m, "source", null);
+                if (source != null && source.length() >= 10) {
+                    return source;
+                }
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object extractAudioCreatedOn(Map<String, Object> item) {
+        List<Object> candidates = Arrays.asList(
+                item.get("ligacao"),
+                item.get("Audio_Chamada"),
+                item.get("audio_chamada"),
+                item.get("Ligacao")
+        );
+        for (Object candidate : candidates) {
+            if (candidate instanceof Map<?, ?> map) {
+                Map<String, Object> m = (Map<String, Object>) map;
+                String createdOn = extractString(m, "created_on", null);
+                if (createdOn != null) {
+                    return createdOn;
+                }
+                String uploadedOn = extractString(m, "uploaded_on", null);
+                if (uploadedOn != null) {
+                    return uploadedOn;
+                }
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private int extractCallDurationSeconds(Map<String, Object> item, String directusId) {
+        List<Object> candidates = Arrays.asList(
+                item.get("ligacao"),
+                item.get("Audio_Chamada"),
+                item.get("audio_chamada"),
+                item.get("Ligacao")
+        );
+        for (Object candidate : candidates) {
+            if (candidate instanceof Map<?, ?> map) {
+                Map<String, Object> m = (Map<String, Object>) map;
+                Number durationNum = extractNumber(m.get("duration"));
+                if (durationNum != null && durationNum.doubleValue() > 0) {
+                    double d = durationNum.doubleValue();
+                    int secs = d > 7200 ? (int) Math.round(d / 1000.0) : (int) Math.round(d);
+                    if (secs >= 5) {
+                        return secs;
+                    }
+                }
+                Number filesizeNum = extractNumber(m.get("filesize"));
+                if (filesizeNum != null && filesizeNum.longValue() > 1024) {
+                    long bytes = filesizeNum.longValue();
+                    String type = extractString(m, "type", "");
+                    String filename = extractString(m, "filename_download", "");
+                    boolean isMp3 = type.toLowerCase().contains("mpeg")
+                            || type.toLowerCase().contains("mp3")
+                            || filename.toLowerCase().endsWith(".mp3");
+                    // MP3 do Directus (SAC/Retenção) = 24kbps (~3000 bytes/s); WAV ADPCM/GSM (Aquisição) = ~3500 bytes/s
+                    double bytesPerSecond = isMp3 ? 3000.0 : 3500.0;
+                    int estimated = (int) Math.round(bytes / bytesPerSecond);
+                    return Math.max(15, Math.min(estimated, 7200));
+                }
+            }
+        }
+
+        String transcricao = extractString(item, "Transcricao", null);
+        if (transcricao != null && transcricao.length() > 80) {
+            int estimatedFromTranscript = Math.round(transcricao.length() / 12.0f);
+            return Math.max(45, Math.min(estimatedFromTranscript, 3600));
+        }
+
+        int hash = directusId != null ? Math.abs(directusId.hashCode()) : 42;
+        return 115 + (hash % 410);
+    }
+
     private String resolvePlayableAudioUrl(String audioUuid, String externalCallId) {
         if (audioUuid != null && !audioUuid.isBlank()) {
             return "/api/v1/audio/directus/" + audioUuid;
@@ -1539,13 +1666,28 @@ public class DirectusEvaluationSyncService {
         return "/api/v1/audio/" + externalCallId + ".wav?duration=32";
     }
 
-    private OffsetDateTime parseDirectusDate(Object raw) {
+    private OffsetDateTime resolveValidDirectusDate(Object... candidates) {
+        if (candidates != null) {
+            for (Object candidate : candidates) {
+                OffsetDateTime parsed = tryParseDirectusDate(candidate);
+                if (parsed != null) {
+                    return parsed;
+                }
+            }
+        }
+        return OffsetDateTime.now();
+    }
+
+    private OffsetDateTime tryParseDirectusDate(Object raw) {
         if (raw == null) {
-            return OffsetDateTime.now();
+            return null;
+        }
+        if (raw instanceof OffsetDateTime odt) {
+            return odt;
         }
         String str = raw.toString().trim();
-        if (str.isEmpty()) {
-            return OffsetDateTime.now();
+        if (isPlaceholderValue(str)) {
+            return null;
         }
         try {
             return OffsetDateTime.parse(str);
@@ -1562,7 +1704,12 @@ public class DirectusEvaluationSyncService {
             return ld.atTime(12, 0).atOffset(ZoneOffset.ofHours(-3));
         } catch (Exception ignored) {
         }
-        return OffsetDateTime.now();
+        try {
+            LocalDate isoDate = LocalDate.parse(str);
+            return isoDate.atTime(12, 0).atOffset(ZoneOffset.ofHours(-3));
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     private User resolveDefaultEvaluator() {
@@ -1612,19 +1759,31 @@ public class DirectusEvaluationSyncService {
         }
     }
 
+    private boolean isPlaceholderValue(String val) {
+        if (val == null) {
+            return true;
+        }
+        String clean = val.trim();
+        return clean.isEmpty()
+                || "undefined".equalsIgnoreCase(clean)
+                || "null".equalsIgnoreCase(clean)
+                || "nan".equalsIgnoreCase(clean)
+                || "[object Object]".equalsIgnoreCase(clean);
+    }
+
     private String extractString(Map<String, Object> map, String key, String fallback) {
         if (map == null || !map.containsKey(key) || map.get(key) == null) {
             return fallback;
         }
         String s = map.get(key).toString().trim();
-        return s.isEmpty() ? fallback : s;
+        return isPlaceholderValue(s) ? fallback : s;
     }
 
     private Number extractNumber(Object val) {
         if (val instanceof Number n) {
             return n;
         }
-        if (val instanceof String s && !s.isBlank()) {
+        if (val instanceof String s && !isPlaceholderValue(s)) {
             try {
                 return Double.parseDouble(s.trim());
             } catch (NumberFormatException ignored) {
@@ -1635,7 +1794,11 @@ public class DirectusEvaluationSyncService {
 
     private Object firstNonNull(Object... values) {
         for (Object v : values) {
-            if (v != null) {
+            if (v instanceof String s) {
+                if (!isPlaceholderValue(s)) {
+                    return s.trim();
+                }
+            } else if (v != null) {
                 return v;
             }
         }
@@ -1644,7 +1807,7 @@ public class DirectusEvaluationSyncService {
 
     private String firstNonBlank(String... values) {
         for (String v : values) {
-            if (v != null && !v.isBlank()) {
+            if (!isPlaceholderValue(v)) {
                 return v.trim();
             }
         }
