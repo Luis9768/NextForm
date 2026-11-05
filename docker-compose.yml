@@ -1,14 +1,13 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: formshq-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-formshq}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    expose:
+      - "5432"
     volumes:
       - formshq_pgdata:/var/lib/postgresql/data
     networks:
@@ -24,7 +23,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: formshq-backend
     restart: unless-stopped
     depends_on:
       postgres:
@@ -50,12 +48,13 @@ services:
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
       DIRECTUS_BASE_URL: ${DIRECTUS_BASE_URL:-}
       DIRECTUS_API_TOKEN: ${DIRECTUS_API_TOKEN:-}
+      DIRECTUS_INITIAL_EVAL_LIMIT: ${DIRECTUS_INITIAL_EVAL_LIMIT:-50}
       CUSTOMER_WEBHOOK_URL: ${CUSTOMER_WEBHOOK_URL:-}
       EXTERNAL_CUSTOMER_API_URL: ${EXTERNAL_CUSTOMER_API_URL:-https://api.crm-externo.empresa.com/v1}
       EXTERNAL_CUSTOMER_API_TOKEN: ${EXTERNAL_CUSTOMER_API_TOKEN:-crm-external-bearer-token-2026}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
-    ports:
-      - "${BACKEND_PORT:-8080}:8080"
+    expose:
+      - "8080"
     networks:
       - formshq-network
     healthcheck:
@@ -70,19 +69,20 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080/api/v1}
+        INTERNAL_BACKEND_URL: http://backend:8080
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
         NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL: ${NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL:-}
-    container_name: formshq-frontend
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080/api/v1}
+      INTERNAL_BACKEND_URL: http://backend:8080
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
       NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL: ${NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL:-}
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+    expose:
+      - "3000"
     networks:
       - formshq-network
 
