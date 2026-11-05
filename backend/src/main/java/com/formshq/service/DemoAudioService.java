@@ -167,8 +167,7 @@ public class DemoAudioService {
             }
 
             if (!filePath.startsWith(uploadDir) || !Files.exists(filePath)) {
-                byte[] fallbackWav = generateSimulatedCallWav(fileName, 25);
-                return sliceBytesForRange(fallbackWav, "audio/wav", rangeHeader);
+                throw new ResourceNotFoundException("Arquivo de áudio não encontrado: " + fileName);
             }
 
             long fileSizeLong = Files.size(filePath);
@@ -183,8 +182,7 @@ public class DemoAudioService {
                     : "audio/wav";
 
             if (totalLength == 0) {
-                byte[] fallbackWav = generateSimulatedCallWav(fileName, 25);
-                return sliceBytesForRange(fallbackWav, "audio/wav", rangeHeader);
+                throw new ResourceNotFoundException("Arquivo de áudio vazio: " + fileName);
             }
 
             boolean isPartial = rangeHeader != null && rangeHeader.startsWith("bytes=");
@@ -215,9 +213,10 @@ public class DemoAudioService {
             }
 
             return new AudioStreamSlice(buffer.array(), contentType, totalLength, start, end, isPartial, false);
+        } catch (ResourceNotFoundException e) {
+            throw e;
         } catch (Exception e) {
-            byte[] fallbackWav = generateSimulatedCallWav(fileName, 25);
-            return sliceBytesForRange(fallbackWav, "audio/wav", rangeHeader);
+            throw new ResourceNotFoundException("Não foi possível carregar o arquivo de áudio: " + fileName);
         }
     }
 

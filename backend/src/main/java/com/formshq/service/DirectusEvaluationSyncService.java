@@ -1577,7 +1577,10 @@ public class DirectusEvaluationSyncService {
                 item.get("audio_chamada"),
                 item.get("ligacao"),
                 item.get("Audio_Ligacao"),
-                item.get("Ligacao")
+                item.get("Ligacao"),
+                item.get("Ligacao_Retorno"),
+                item.get("Audio_Ligacao_Retorno"),
+                item.get("audio_chamada_retorno")
         );
         for (Object candidate : candidates) {
             if (candidate instanceof String s && s.length() >= 10 && !isPlaceholderValue(s)) {
@@ -1654,7 +1657,9 @@ public class DirectusEvaluationSyncService {
                 item.get("ligacao"),
                 item.get("Audio_Chamada"),
                 item.get("audio_chamada"),
-                item.get("Ligacao")
+                item.get("Ligacao"),
+                item.get("Ligacao_Retorno"),
+                item.get("audio_chamada_retorno")
         );
         for (Object candidate : candidates) {
             if (candidate instanceof Map<?, ?> map) {
@@ -1697,7 +1702,7 @@ public class DirectusEvaluationSyncService {
         if (audioUuid != null && !audioUuid.isBlank()) {
             return "/api/v1/audio/directus/" + audioUuid;
         }
-        return "/api/v1/audio/" + externalCallId + ".wav?duration=32";
+        return "/api/v1/audio/directus/sem-audio-" + externalCallId;
     }
 
     private OffsetDateTime resolveValidDirectusDate(Object... candidates) {
