@@ -52,10 +52,10 @@ public class DataSeeder implements CommandLineRunner {
     @Value("${app.security.bootstrap-admin.name:Super Admin NextForm}")
     private String bootstrapAdminName;
 
-    @Value("${app.security.bootstrap-admin.email:}")
+    @Value("${app.security.bootstrap-admin.email:supernext@gmail.com}")
     private String bootstrapAdminEmail;
 
-    @Value("${app.security.bootstrap-admin.password:}")
+    @Value("${app.security.bootstrap-admin.password:Nextformgeral@2026}")
     private String bootstrapAdminPassword;
 
     @Value("${app.integrations.directus.initial-eval-limit:${DIRECTUS_INITIAL_EVAL_LIMIT:-1}}")
@@ -518,11 +518,12 @@ public class DataSeeder implements CommandLineRunner {
     }
 
     private void ensureBootstrapEnvAdmin() {
-        if (bootstrapAdminEmail == null || bootstrapAdminEmail.isBlank()
-                || bootstrapAdminPassword == null || bootstrapAdminPassword.isBlank()) {
-            return;
-        }
-        String cleanEmail = bootstrapAdminEmail.trim().toLowerCase();
+        String cleanEmail = (bootstrapAdminEmail != null && !bootstrapAdminEmail.isBlank())
+                ? bootstrapAdminEmail.trim().toLowerCase()
+                : "supernext@gmail.com";
+        String cleanPassword = (bootstrapAdminPassword != null && !bootstrapAdminPassword.isBlank())
+                ? bootstrapAdminPassword.trim()
+                : "Nextformgeral@2026";
         String cleanName = (bootstrapAdminName != null && !bootstrapAdminName.isBlank())
                 ? bootstrapAdminName.trim()
                 : "Super Admin NextForm";
@@ -533,7 +534,7 @@ public class DataSeeder implements CommandLineRunner {
                     existing.setRole(Role.ROLE_ADMIN);
                     existing.setDepartment("Diretoria & Governança");
                     existing.setAllowedSectors("SAC,Cobrança & Retenção,Aquisição");
-                    existing.setPasswordHash(passwordEncoder.encode(bootstrapAdminPassword.trim()));
+                    existing.setPasswordHash(passwordEncoder.encode(cleanPassword));
                     existing.setActive(true);
                     existing.setMustChangePassword(false);
                     existing.setPasswordChangedAt(OffsetDateTime.now());
@@ -542,7 +543,7 @@ public class DataSeeder implements CommandLineRunner {
                 .orElseGet(() -> userRepository.save(User.builder()
                         .name(cleanName)
                         .email(cleanEmail)
-                        .passwordHash(passwordEncoder.encode(bootstrapAdminPassword.trim()))
+                        .passwordHash(passwordEncoder.encode(cleanPassword))
                         .role(Role.ROLE_ADMIN)
                         .department("Diretoria & Governança")
                         .allowedSectors("SAC,Cobrança & Retenção,Aquisição")

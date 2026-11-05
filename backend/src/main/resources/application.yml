@@ -36,11 +36,11 @@ app:
       secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
       expiration-ms: ${JWT_EXPIRATION_MS:86400000}
     n8n-api-key: ${N8N_API_KEY:n8n-secret-api-key-2026}
-    first-access-password: ${APP_FIRST_ACCESS_PASSWORD:}
+    first-access-password: ${APP_FIRST_ACCESS_PASSWORD:Headset@2026}
     bootstrap-admin:
       name: ${APP_BOOTSTRAP_ADMIN_NAME:Super Admin NextForm}
-      email: ${APP_BOOTSTRAP_ADMIN_EMAIL:}
-      password: ${APP_BOOTSTRAP_ADMIN_PASSWORD:}
+      email: ${APP_BOOTSTRAP_ADMIN_EMAIL:supernext@gmail.com}
+      password: ${APP_BOOTSTRAP_ADMIN_PASSWORD:Nextformgeral@2026}
   storage:
     r2:
       endpoint: ${R2_ENDPOINT:}
