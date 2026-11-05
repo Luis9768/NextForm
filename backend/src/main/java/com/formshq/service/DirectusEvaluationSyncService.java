@@ -54,6 +54,7 @@ public class DirectusEvaluationSyncService {
     private final UserService userService;
     private final PasswordEncoder passwordEncoder;
     private final ObjectMapper objectMapper;
+    private final DemoAudioService demoAudioService;
 
     private final String configuredDirectusBaseUrl;
     private final String configuredDirectusToken;
@@ -70,6 +71,7 @@ public class DirectusEvaluationSyncService {
             UserService userService,
             PasswordEncoder passwordEncoder,
             ObjectMapper objectMapper,
+            DemoAudioService demoAudioService,
             @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String configuredDirectusBaseUrl,
             @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String configuredDirectusToken,
             @Value("${app.security.bootstrap-admin.email:}") String bootstrapAdminEmail
@@ -84,9 +86,41 @@ public class DirectusEvaluationSyncService {
         this.userService = userService;
         this.passwordEncoder = passwordEncoder;
         this.objectMapper = objectMapper;
+        this.demoAudioService = demoAudioService;
         this.configuredDirectusBaseUrl = configuredDirectusBaseUrl;
         this.configuredDirectusToken = configuredDirectusToken;
         this.bootstrapAdminEmail = bootstrapAdminEmail;
+    }
+
+    /**
+     * Faz o download físico de todas as gravações de áudio disponíveis no Directus para o volume persistente
+     * local (/app/data/uploads) e para o Cloudflare R2 (quando configurado).
+     */
+    public Map<String, Object> backupAllDirectusAudios() {
+        List<CallRecord> allCalls = callRecordRepository.findAllByOrderByCallDateDesc();
+        int totalChecked = 0;
+        int backedUpCount = 0;
+        int unavailableOnOriginCount = 0;
+
+        for (CallRecord call : allCalls) {
+            String url = call.getAudioUrl();
+            if (url != null && url.contains("/api/v1/audio/directus/")) {
+                totalChecked++;
+                String fileId = url.substring(url.lastIndexOf("/") + 1).trim();
+                if (demoAudioService.ensureDirectusAudioBackedUp(fileId)) {
+                    backedUpCount++;
+                } else {
+                    unavailableOnOriginCount++;
+                }
+            }
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("totalChecked", totalChecked);
+        summary.put("backedUpCount", backedUpCount);
+        summary.put("unavailableOnOriginCount", unavailableOnOriginCount);
+        summary.put("syncedAt", OffsetDateTime.now());
+        return summary;
     }
 
     /**

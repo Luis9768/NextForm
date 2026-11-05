@@ -86,10 +86,17 @@ public class DataSeeder implements CommandLineRunner {
                     var evalResult = directusEvaluationSyncService.pullFromDirectusApi(
                             new com.formshq.dto.directus.DirectusPullRequest(null, null, "ALL", directusInitialEvalLimit)
                     );
-                    log.info("Sincronização inicial de Avaliações Directus concluída: {} avaliações importadas, {} duplicadas ignoradas.",
+                    log.info("Sincronização inicial de Avaliações Directus concluída: {} avaliações importadas, {} atualizadas/ignoradas.",
                             evalResult.importedCount(), evalResult.skippedDuplicates());
                 } catch (Exception e) {
                     log.warn("Aviso ao sincronizar avaliações do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
+                }
+
+                try {
+                    var audioBackup = directusEvaluationSyncService.backupAllDirectusAudios();
+                    log.info("Backup físico de áudios do Directus concluído: {}", audioBackup);
+                } catch (Exception e) {
+                    log.warn("Aviso ao fazer backup físico dos áudios do Directus: {}", e.getMessage());
                 }
             });
             return;

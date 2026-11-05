@@ -22,7 +22,7 @@ WORKDIR /app
 # Security Hardening: Create non-root user and group
 RUN addgroup -g 1001 -S spring && \
     adduser -u 1001 -S spring -G spring && \
-    mkdir -p /app/data && \
+    mkdir -p /app/data/uploads && \
     chown -R spring:spring /app
 
 # Copy layered JAR artifacts for optimal image caching and fast startup

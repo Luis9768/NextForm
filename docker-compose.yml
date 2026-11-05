@@ -53,6 +53,8 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
     expose:
       - "8080"
+    volumes:
+      - formshq_uploads:/app/data/uploads
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/actuator/health || exit 1"]
       interval: 15s
@@ -89,3 +91,4 @@ services:
 
 volumes:
   formshq_pgdata:
+  formshq_uploads:

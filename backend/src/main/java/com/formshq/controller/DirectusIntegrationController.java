@@ -76,4 +76,12 @@ public class DirectusIntegrationController {
     ) {
         return ResponseEntity.ok(directusSyncService.importLocalSamples(limitPerCollection));
     }
+
+    @PostMapping("/backup-audios")
+    @Operation(
+            summary = "Faz o download físico de todos os áudios disponíveis no Directus para o disco persistente do NEXFORM (/app/data/uploads) e Cloudflare R2"
+    )
+    public ResponseEntity<java.util.Map<String, Object>> backupAllDirectusAudios() {
+        return ResponseEntity.ok(directusSyncService.backupAllDirectusAudios());
+    }
 }

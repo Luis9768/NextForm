@@ -58,6 +58,29 @@ public class DemoAudioService {
         return sliceBytesForRange(fullWav, "audio/wav", rangeHeader);
     }
 
+    /**
+     * Faz o download físico preventivo de um arquivo de áudio do Directus para o volume persistente local (/app/data/uploads)
+     * e para o Cloudflare R2 (quando configurado), garantindo que o áudio nunca se perca caso o Directus seja desligado.
+     */
+    public boolean ensureDirectusAudioBackedUp(String fileId) {
+        if (fileId == null || !fileId.matches("^[a-zA-Z0-9._-]+$")) {
+            return false;
+        }
+        try {
+            Path uploadDir = Paths.get("./data/uploads").toAbsolutePath().normalize();
+            Files.createDirectories(uploadDir);
+            String cachedMp3 = "directus_" + fileId + ".mp3";
+            String cachedWav = "directus_" + fileId + ".wav";
+            if (Files.exists(uploadDir.resolve(cachedMp3)) || Files.exists(uploadDir.resolve(cachedWav))) {
+                return true;
+            }
+            resolveDirectusAssetAudioSlice(fileId, "bytes=0-63");
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     public AudioStreamSlice resolveDirectusAssetAudioSlice(String fileId, String rangeHeader) {
         if (fileId == null || !fileId.matches("^[a-zA-Z0-9._-]+$")) {
             throw new BusinessRuleException("ID de arquivo de áudio do Directus inválido.");
