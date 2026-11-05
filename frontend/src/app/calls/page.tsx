@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
+import { TablePagination } from "@/components/ui/TablePagination";
 import { useAuth } from "@/context/AuthContext";
 import { callsApi } from "@/lib/api";
 import {
@@ -28,6 +29,8 @@ export default function CallsListPage() {
   const [statusFilter, setStatusFilter] = useState<CallStatus | "ALL">("ALL");
   const [searchTerm, setSearchTerm] = useState("");
   const [playingCallId, setPlayingCallId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
 
   const { data: calls = [], isLoading } = useQuery({
     queryKey: [
@@ -55,6 +58,13 @@ export default function CallsListPage() {
         (call.channel && call.channel.toLowerCase().includes(q))
     );
   }, [calls, searchTerm]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCalls.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedCalls = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredCalls.slice(start, start + pageSize);
+  }, [filteredCalls, safePage, pageSize]);
 
   const metrics = useMemo(() => {
     const total = calls.length;
@@ -116,7 +126,10 @@ export default function CallsListPage() {
                   <button
                     key={tab.id}
                     type="button"
-                    onClick={() => setStatusFilter(tab.id)}
+                    onClick={() => {
+                      setStatusFilter(tab.id);
+                      setCurrentPage(1);
+                    }}
                     className={`h-7 px-2.5 rounded-md text-xs font-medium transition-colors ${
                       active
                         ? "bg-zinc-100 text-zinc-950 font-semibold"
@@ -134,7 +147,10 @@ export default function CallsListPage() {
               <input
                 type="text"
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
                 placeholder="Buscar protocolo, telefone ou analista..."
                 className="w-full h-8 pl-8 pr-3 rounded-md border border-zinc-800 bg-[#09090b] text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-600"
               />
@@ -177,7 +193,7 @@ export default function CallsListPage() {
               </p>
             </div>
           ) : (
-            filteredCalls.map((call) => {
+            paginatedCalls.map((call) => {
               const isEvaluated = call.status === "AVALIADA";
               const evalBadge = getEvaluationStatusBadge(call.evaluationStatus);
               const isPlaying = playingCallId === call.id;
@@ -317,6 +333,18 @@ export default function CallsListPage() {
               );
             })
           )}
+
+          <TablePagination
+            currentPage={safePage}
+            totalItems={filteredCalls.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setCurrentPage(1);
+            }}
+            itemLabel="ligações"
+          />
         </div>
       </div>
     </AppShell>

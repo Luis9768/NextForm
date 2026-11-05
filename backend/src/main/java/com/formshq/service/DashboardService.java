@@ -197,7 +197,7 @@ public class DashboardService {
         List<CriteriaPerformanceDto> criteriaComparison = buildCriteriaComparison(evaluations);
 
         List<EvaluationResponse> recentEvaluations = evaluations.stream()
-                .limit(10)
+                .limit(100)
                 .map(EvaluationResponse::fromEntity)
                 .toList();
 

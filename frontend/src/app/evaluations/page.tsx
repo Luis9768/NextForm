@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
+import { TablePagination } from "@/components/ui/TablePagination";
 import { useAuth } from "@/context/AuthContext";
 import {
   directusApi,
@@ -44,6 +45,8 @@ export default function EvaluationsListPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [playingEvalId, setPlayingEvalId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
 
   // Modal de Sincronização / Pull com Directus
   const [isDirectusModalOpen, setIsDirectusModalOpen] = useState(false);
@@ -125,6 +128,16 @@ export default function EvaluationsListPage() {
     return true;
   });
 
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredEvaluations.length / pageSize)
+  );
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedEvaluations = filteredEvaluations.slice(
+    (safePage - 1) * pageSize,
+    safePage * pageSize
+  );
+
   return (
     <AppShell>
       <div className="space-y-4 pb-14 w-full overflow-x-hidden">
@@ -145,7 +158,10 @@ export default function EvaluationsListPage() {
                   <button
                     key={tab.id}
                     type="button"
-                    onClick={() => setStatusFilter(tab.id)}
+                    onClick={() => {
+                      setStatusFilter(tab.id);
+                      setCurrentPage(1);
+                    }}
                     className={`h-7 px-2.5 rounded-md text-xs font-medium transition-colors ${
                       active
                         ? "bg-zinc-100 text-zinc-950 font-semibold"
@@ -283,7 +299,7 @@ export default function EvaluationsListPage() {
               </p>
             </div>
           ) : (
-            filteredEvaluations.map((ev) => {
+            paginatedEvaluations.map((ev) => {
               const badge = getEvaluationStatusBadge(ev.status);
               const isPlaying = playingEvalId === ev.id;
               const sectorLabel =
@@ -405,6 +421,18 @@ export default function EvaluationsListPage() {
               );
             })
           )}
+
+          <TablePagination
+            currentPage={safePage}
+            totalItems={filteredEvaluations.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setCurrentPage(1);
+            }}
+            itemLabel="avaliações"
+          />
         </div>
 
         {/* Popup de Sincronização / Pull da API do Directus */}

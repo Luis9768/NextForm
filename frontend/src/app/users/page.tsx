@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
+import { TablePagination } from "@/components/ui/TablePagination";
 import { useAuth } from "@/context/AuthContext";
 import {
   directusApi,
@@ -39,6 +40,8 @@ export default function UsersManagementPage() {
   const [roleFilter, setRoleFilter] = useState<string>("ALL");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
 
@@ -89,6 +92,13 @@ export default function UsersManagementPage() {
         (u.department && u.department.toLowerCase().includes(q))
     );
   }, [users, searchQuery]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedUsers = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredUsers.slice(start, start + pageSize);
+  }, [filteredUsers, safePage, pageSize]);
 
   const metrics = useMemo(() => {
     const total = users.length;
@@ -405,7 +415,7 @@ export default function UsersManagementPage() {
               Nenhum colaborador encontrado.
             </div>
           ) : (
-            filteredUsers.map((u) => {
+            paginatedUsers.map((u) => {
               const canManageTarget = isAdmin || u.role === "ROLE_ANALISTA";
               const sectorsList =
                 u.role === "ROLE_GESTOR"
@@ -522,6 +532,18 @@ export default function UsersManagementPage() {
               );
             })
           )}
+
+          <TablePagination
+            currentPage={safePage}
+            totalItems={filteredUsers.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setCurrentPage(1);
+            }}
+            itemLabel="colaboradores"
+          />
         </div>
 
         {/* Modal: Trocar Senha de Colaborador (Gestor -> Analista | Admin -> Gestor/Analista) */}

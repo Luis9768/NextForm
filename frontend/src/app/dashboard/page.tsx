@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
+import { TablePagination } from "@/components/ui/TablePagination";
 import { useAuth } from "@/context/AuthContext";
 import { dashboardApi } from "@/lib/api";
 import { formatDateTime, getEvaluationStatusBadge } from "@/lib/utils";
@@ -84,6 +85,10 @@ export default function DashboardPage() {
     "ALL" | "APROVADO" | "REPROVADO" | "ZERADO_ERRO_GRAVE"
   >("ALL");
   const [hoveredPointIdx, setHoveredPointIdx] = useState<number | null>(null);
+  const [evalPage, setEvalPage] = useState(1);
+  const [evalPageSize, setEvalPageSize] = useState(15);
+  const [rankingPage, setRankingPage] = useState(1);
+  const [rankingPageSize, setRankingPageSize] = useState(15);
 
   const { data: summary, isLoading } = useQuery({
     queryKey: [
@@ -213,6 +218,27 @@ export default function DashboardPage() {
       statusFilter === "ALL" ? true : ev.status === statusFilter
     );
   }, [summary?.recentEvaluations, statusFilter]);
+
+  const evalTotalPages = Math.max(
+    1,
+    Math.ceil(filteredEvaluationsTable.length / evalPageSize)
+  );
+  const safeEvalPage = Math.min(evalPage, evalTotalPages);
+  const paginatedEvalTable = useMemo(() => {
+    const start = (safeEvalPage - 1) * evalPageSize;
+    return filteredEvaluationsTable.slice(start, start + evalPageSize);
+  }, [filteredEvaluationsTable, safeEvalPage, evalPageSize]);
+
+  const rankingList = summary?.analystRanking ?? [];
+  const rankingTotalPages = Math.max(
+    1,
+    Math.ceil(rankingList.length / rankingPageSize)
+  );
+  const safeRankingPage = Math.min(rankingPage, rankingTotalPages);
+  const paginatedRankingTable = useMemo(() => {
+    const start = (safeRankingPage - 1) * rankingPageSize;
+    return rankingList.slice(start, start + rankingPageSize);
+  }, [rankingList, safeRankingPage, rankingPageSize]);
 
   return (
     <AppShell>
@@ -1132,7 +1158,7 @@ export default function DashboardPage() {
                     <span className="text-right">Ações</span>
                   </div>
 
-                  {filteredEvaluationsTable.map((ev) => {
+                  {paginatedEvalTable.map((ev) => {
                     const badge = getEvaluationStatusBadge(ev.status);
                     const sectorLabel =
                       ev.analystSectorSnapshot ||
@@ -1238,6 +1264,18 @@ export default function DashboardPage() {
                       </div>
                     );
                   })}
+
+                  <TablePagination
+                    currentPage={safeEvalPage}
+                    totalItems={filteredEvaluationsTable.length}
+                    pageSize={evalPageSize}
+                    onPageChange={setEvalPage}
+                    onPageSizeChange={(size) => {
+                      setEvalPageSize(size);
+                      setEvalPage(1);
+                    }}
+                    itemLabel="avaliações"
+                  />
                 </div>
               ) : (
                 <div className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] divide-y divide-zinc-800/60 overflow-hidden">
@@ -1251,7 +1289,7 @@ export default function DashboardPage() {
                     <span className="text-right">Ação</span>
                   </div>
 
-                  {summary.analystRanking.map((analyst) => {
+                  {paginatedRankingTable.map((analyst) => {
                     const initials = (analyst.analystName || "OP")
                       .split(" ")
                       .filter(Boolean)
@@ -1306,6 +1344,18 @@ export default function DashboardPage() {
                       </div>
                     );
                   })}
+
+                  <TablePagination
+                    currentPage={safeRankingPage}
+                    totalItems={rankingList.length}
+                    pageSize={rankingPageSize}
+                    onPageChange={setRankingPage}
+                    onPageSizeChange={(size) => {
+                      setRankingPageSize(size);
+                      setRankingPage(1);
+                    }}
+                    itemLabel="operadores"
+                  />
                 </div>
               )}
             </div>
