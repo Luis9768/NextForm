@@ -1,10 +1,13 @@
 package com.formshq.controller;
 
+import com.formshq.exception.ResourceNotFoundException;
 import com.formshq.service.DemoAudioService;
 import com.formshq.service.DemoAudioService.AudioStreamSlice;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 public class DemoAudioController {
 
     private final DemoAudioService demoAudioService;
+    private final Environment environment;
 
     @GetMapping(value = "/{callIdentifier}.wav", produces = "audio/wav")
     @Operation(summary = "Reproduz o áudio da gravação da ligação com suporte a seek (Range requests)")
@@ -25,6 +29,9 @@ public class DemoAudioController {
             @RequestParam(defaultValue = "25") int duration,
             @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader
     ) {
+        if (!environment.acceptsProfiles(Profiles.of("test"))) {
+            throw new ResourceNotFoundException("Áudio de demonstração desativado em produção.");
+        }
         AudioStreamSlice slice = demoAudioService.resolveSynthesizedAudioSlice(callIdentifier, duration, rangeHeader);
         return toRangeResponse(slice);
     }

@@ -303,17 +303,29 @@ public class DirectusEvaluationSyncService {
                 .orElse(primaryAdmin);
 
         for (Evaluation ev : allEvals) {
-            String extId = ev.getCallRecord() != null ? ev.getCallRecord().getExternalCallId() : "";
+            CallRecord cr = ev.getCallRecord();
+            String extId = cr != null ? cr.getExternalCallId() : "";
+            String audioUrl = cr != null && cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
+            String callDateStr = cr != null && cr.getCallDate() != null ? cr.getCallDate().toString() : "";
+            String custName = cr != null && cr.getCustomer() != null && cr.getCustomer().getName() != null
+                    ? cr.getCustomer().getName()
+                    : "";
             String analystEmail = ev.getAnalyst() != null && ev.getAnalyst().getEmail() != null
                     ? ev.getAnalyst().getEmail().toLowerCase()
                     : "";
-            boolean isFictionalDemoEval = (extId != null && legacyDemoCallIds.contains(extId))
+            boolean isCorruptedNov5Batch = callDateStr.startsWith("2026-11-05T18:")
+                    || callDateStr.startsWith("2026-11-05T19:")
+                    || "Undefined".equalsIgnoreCase(custName)
+                    || audioUrl.contains(".wav?duration=")
+                    || audioUrl.contains("sem-audio-");
+            boolean isFictionalDemoEval = isCorruptedNov5Batch
+                    || (extId != null && legacyDemoCallIds.contains(extId))
                     || (analystEmail.endsWith("@empresa.com") && (extId == null || !extId.startsWith("directus_")));
 
             if (isFictionalDemoEval) {
-                if (ev.getCallRecord() != null) {
-                    ev.getCallRecord().setEvaluation(null);
-                    callRecordRepository.save(ev.getCallRecord());
+                if (cr != null) {
+                    cr.setEvaluation(null);
+                    callRecordRepository.save(cr);
                 }
                 evaluationRepository.delete(ev);
                 purgedEvaluations++;
@@ -322,9 +334,9 @@ public class DirectusEvaluationSyncService {
                 if (ev.getAnalyst() != null && (analystEmail.endsWith("@empresa.com") || analystEmail.endsWith("@directus.empresa.com"))) {
                     User matched = findBestMatchingDirectusUser(ev.getAnalyst().getName(), validDirectusEmails, fallbackRealAnalyst);
                     ev.setAnalyst(matched);
-                    if (ev.getCallRecord() != null) {
-                        ev.getCallRecord().setAnalyst(matched);
-                        callRecordRepository.save(ev.getCallRecord());
+                    if (cr != null) {
+                        cr.setAnalyst(matched);
+                        callRecordRepository.save(cr);
                     }
                     changed = true;
                 }
@@ -345,10 +357,21 @@ public class DirectusEvaluationSyncService {
         List<CallRecord> allCalls = callRecordRepository.findAll();
         for (CallRecord cr : allCalls) {
             String extId = cr.getExternalCallId();
+            String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
+            String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
+            String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null
+                    ? cr.getCustomer().getName()
+                    : "";
             String analystEmail = cr.getAnalyst() != null && cr.getAnalyst().getEmail() != null
                     ? cr.getAnalyst().getEmail().toLowerCase()
                     : "";
-            boolean isFictionalDemoCall = (extId != null && legacyDemoCallIds.contains(extId))
+            boolean isCorruptedNov5Call = callDateStr.startsWith("2026-11-05T18:")
+                    || callDateStr.startsWith("2026-11-05T19:")
+                    || "Undefined".equalsIgnoreCase(custName)
+                    || audioUrl.contains(".wav?duration=")
+                    || audioUrl.contains("sem-audio-");
+            boolean isFictionalDemoCall = isCorruptedNov5Call
+                    || (extId != null && legacyDemoCallIds.contains(extId))
                     || (cr.getEvaluation() == null && analystEmail.endsWith("@empresa.com"));
 
             if (isFictionalDemoCall) {
@@ -647,6 +670,26 @@ public class DirectusEvaluationSyncService {
                 String directusId = extractString(item, "id", UUID.randomUUID().toString().substring(0, 8));
                 String externalCallId = buildDeterministicExternalCallId(collection, directusId);
 
+                Object rawDataVendaObj = item.get("Data_da_venda");
+                Object rawNomeObj = item.get("Nome");
+                boolean isBrokenUndefinedRecord = (rawDataVendaObj != null && "undefined".equalsIgnoreCase(rawDataVendaObj.toString().trim()))
+                        || (rawNomeObj != null && "undefined".equalsIgnoreCase(rawNomeObj.toString().trim()));
+                String audioUuid = extractAudioUuid(item);
+
+                if (isBrokenUndefinedRecord || audioUuid == null || audioUuid.isBlank()) {
+                    callRecordRepository.findByExternalCallId(externalCallId).ifPresent(existing -> {
+                        if (existing.getEvaluation() != null) {
+                            Evaluation ev = existing.getEvaluation();
+                            existing.setEvaluation(null);
+                            callRecordRepository.save(existing);
+                            evaluationRepository.delete(ev);
+                        }
+                        callRecordRepository.delete(existing);
+                    });
+                    skippedDuplicates++;
+                    continue;
+                }
+
                 EvaluationFormTemplate template = templatesByCollection.get(collection);
                 if (template == null) {
                     warnings.add("Template não encontrado para a collection: " + collection);
@@ -670,7 +713,6 @@ public class DirectusEvaluationSyncService {
                 );
 
                 int durationSeconds = extractCallDurationSeconds(item, directusId);
-                String audioUuid = extractAudioUuid(item);
                 String returnAudioUuid = extractReturnAudioUuid(item);
                 String audioUrl = resolvePlayableAudioUrl(audioUuid, externalCallId);
 
