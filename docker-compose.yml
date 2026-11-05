@@ -10,8 +10,6 @@ services:
       - "5432"
     volumes:
       - formshq_pgdata:/var/lib/postgresql/data
-    networks:
-      - formshq-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-formshq}"]
       interval: 10s
@@ -37,9 +35,9 @@ services:
       JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
       N8N_API_KEY: ${N8N_API_KEY:-n8n-secret-api-key-2026}
       APP_BOOTSTRAP_ADMIN_NAME: ${APP_BOOTSTRAP_ADMIN_NAME:-Super Admin NextForm}
-      APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:-}
-      APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
-      APP_FIRST_ACCESS_PASSWORD: ${APP_FIRST_ACCESS_PASSWORD:-}
+      APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:-supernext@gmail.com}
+      APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:-Nextformgeral@2026}
+      APP_FIRST_ACCESS_PASSWORD: ${APP_FIRST_ACCESS_PASSWORD:-Headset@2026}
       R2_ENDPOINT: ${R2_ENDPOINT:-}
       R2_BUCKET: ${R2_BUCKET:-}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
@@ -55,14 +53,12 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
     expose:
       - "8080"
-    networks:
-      - formshq-network
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/actuator/health || exit 1"]
+      interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 25s
+      retries: 5
+      start_period: 30s
 
   frontend:
     build:
@@ -74,21 +70,22 @@ services:
         NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL: ${NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL:-}
     restart: unless-stopped
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
     environment:
       NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: "0.0.0.0"
       INTERNAL_BACKEND_URL: http://backend:8080
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
       NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL: ${NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL:-}
     expose:
       - "3000"
-    networks:
-      - formshq-network
-
-networks:
-  formshq-network:
-    driver: bridge
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/login || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 volumes:
   formshq_pgdata:

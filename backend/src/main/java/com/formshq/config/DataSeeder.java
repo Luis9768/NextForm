@@ -72,25 +72,26 @@ public class DataSeeder implements CommandLineRunner {
         ensureRetencaoFormTemplate();
 
         if (!isTestProfile) {
-            try {
-                var userResult = directusEvaluationSyncService.syncUsersAndPurgeFictionalData(null, null);
-                log.info("Sincronização inicial de Usuários Directus concluída: {} usuários reais ativos, {} fictícios removidos.",
-                        userResult.syncedUsersCount(), userResult.purgedFictionalUsers());
-            } catch (Exception e) {
-                log.warn("Aviso ao sincronizar usuários do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
-            }
-
-            try {
-                var evalResult = directusEvaluationSyncService.pullFromDirectusApi(
-                        new com.formshq.dto.directus.DirectusPullRequest(null, null, "ALL", directusInitialEvalLimit)
-                );
-                log.info("Sincronização inicial de Avaliações Directus concluída: {} avaliações importadas, {} duplicadas ignoradas.",
-                        evalResult.importedCount(), evalResult.skippedDuplicates());
-            } catch (Exception e) {
-                log.warn("Aviso ao sincronizar avaliações do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
-            }
-
             ensureBootstrapEnvAdmin();
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    var userResult = directusEvaluationSyncService.syncUsersAndPurgeFictionalData(null, null);
+                    log.info("Sincronização inicial de Usuários Directus concluída: {} usuários reais ativos, {} fictícios removidos.",
+                            userResult.syncedUsersCount(), userResult.purgedFictionalUsers());
+                } catch (Exception e) {
+                    log.warn("Aviso ao sincronizar usuários do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
+                }
+
+                try {
+                    var evalResult = directusEvaluationSyncService.pullFromDirectusApi(
+                            new com.formshq.dto.directus.DirectusPullRequest(null, null, "ALL", directusInitialEvalLimit)
+                    );
+                    log.info("Sincronização inicial de Avaliações Directus concluída: {} avaliações importadas, {} duplicadas ignoradas.",
+                            evalResult.importedCount(), evalResult.skippedDuplicates());
+                } catch (Exception e) {
+                    log.warn("Aviso ao sincronizar avaliações do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
+                }
+            });
             return;
         }
 
