@@ -1,5 +1,6 @@
 package com.formshq.service;
 
+import com.formshq.config.CacheConfig;
 import com.formshq.domain.entity.CallRecord;
 import com.formshq.domain.entity.Customer;
 import com.formshq.domain.entity.User;
@@ -16,6 +17,8 @@ import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -47,6 +50,10 @@ public class CallRecordService {
     private final R2ObjectStorageService r2ObjectStorageService;
 
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public CallRecordResponse ingestFromN8n(N8nCallWebhookRequest request) {
         String externalId = request.externalCallId().trim();
         if (callRecordRepository.existsByExternalCallId(externalId)) {
@@ -93,6 +100,10 @@ public class CallRecordService {
     }
 
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public CallRecordResponse uploadCallWithAudioFile(
             MultipartFile audioFile,
             UUID analystId,
@@ -177,6 +188,10 @@ public class CallRecordService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(
+            value = CacheConfig.CACHE_CALLS,
+            key = "#currentUser.id + ':' + (#statusFilter ?: 'ALL') + ':' + (#analystIdFilter ?: 'ALL')"
+    )
     public List<CallRecordResponse> listCalls(UserPrincipal currentUser, CallStatus statusFilter, UUID analystIdFilter) {
         List<CallRecord> records;
 
@@ -210,7 +225,7 @@ public class CallRecordService {
         }
 
         return records.stream()
-                .map(CallRecordResponse::fromEntity)
+                .map(CallRecordResponse::fromEntitySummary)
                 .toList();
     }
 

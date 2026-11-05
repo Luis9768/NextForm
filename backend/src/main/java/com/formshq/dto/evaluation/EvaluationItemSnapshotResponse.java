@@ -2,6 +2,7 @@ package com.formshq.dto.evaluation;
 
 import com.formshq.domain.entity.EvaluationItemSnapshot;
 
+import java.io.Serializable;
 import java.util.UUID;
 
 public record EvaluationItemSnapshotResponse(
@@ -15,7 +16,7 @@ public record EvaluationItemSnapshotResponse(
         Integer displayOrder,
         boolean checked,
         String observation
-) {
+) implements Serializable {
     public static EvaluationItemSnapshotResponse fromEntity(EvaluationItemSnapshot snapshot) {
         return new EvaluationItemSnapshotResponse(
                 snapshot.getId(),

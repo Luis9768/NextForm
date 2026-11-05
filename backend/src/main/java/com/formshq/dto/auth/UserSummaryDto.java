@@ -3,6 +3,7 @@ package com.formshq.dto.auth;
 import com.formshq.domain.entity.User;
 import com.formshq.domain.enums.Role;
 
+import java.io.Serializable;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -18,7 +19,7 @@ public record UserSummaryDto(
         List<String> allowedSectors,
         boolean active,
         boolean mustChangePassword
-) {
+) implements Serializable {
     public static UserSummaryDto fromEntity(User user) {
         if (user == null) {
             return null;

@@ -1,5 +1,6 @@
 package com.formshq.dto.dashboard;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 
 public record SectorPerformanceDto(
@@ -7,4 +8,4 @@ public record SectorPerformanceDto(
         long evaluationsCount,
         BigDecimal averageScore,
         BigDecimal approvalRatePercentage
-) {}
+) implements Serializable {}

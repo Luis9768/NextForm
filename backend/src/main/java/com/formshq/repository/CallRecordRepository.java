@@ -17,25 +17,25 @@ public interface CallRecordRepository extends JpaRepository<CallRecord, UUID> {
 
     Optional<CallRecord> findByExternalCallId(String externalCallId);
 
-    @EntityGraph(attributePaths = {"analyst", "customer", "evaluation"})
+    @EntityGraph(attributePaths = {"analyst", "analyst.manager", "customer", "evaluation"})
     List<CallRecord> findAllByOrderByCallDateDesc();
 
-    @EntityGraph(attributePaths = {"analyst", "customer", "evaluation"})
+    @EntityGraph(attributePaths = {"analyst", "analyst.manager", "customer", "evaluation"})
     List<CallRecord> findByStatusOrderByCallDateDesc(CallStatus status);
 
-    @EntityGraph(attributePaths = {"analyst", "customer", "evaluation"})
+    @EntityGraph(attributePaths = {"analyst", "analyst.manager", "customer", "evaluation"})
     List<CallRecord> findByAnalystIdOrderByCallDateDesc(UUID analystId);
 
-    @EntityGraph(attributePaths = {"analyst", "customer", "evaluation"})
+    @EntityGraph(attributePaths = {"analyst", "analyst.manager", "customer", "evaluation"})
     List<CallRecord> findByAnalystIdAndStatusOrderByCallDateDesc(UUID analystId, CallStatus status);
 
-    @EntityGraph(attributePaths = {"analyst", "customer", "evaluation"})
+    @EntityGraph(attributePaths = {"analyst", "analyst.manager", "customer", "evaluation"})
     List<CallRecord> findByCustomerIdOrderByCallDateDesc(UUID customerId);
 
-    @EntityGraph(attributePaths = {"analyst", "customer", "evaluation"})
+    @EntityGraph(attributePaths = {"analyst", "analyst.manager", "customer", "evaluation"})
     List<CallRecord> findByCustomerIdentifierContainingOrderByCallDateDesc(String phoneFragment);
 
-    @EntityGraph(attributePaths = {"analyst", "customer", "evaluation"})
+    @EntityGraph(attributePaths = {"analyst", "analyst.manager", "customer", "evaluation"})
     Optional<CallRecord> findWithDetailsById(UUID id);
 
     long countByStatus(CallStatus status);

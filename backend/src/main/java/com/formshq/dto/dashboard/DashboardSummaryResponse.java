@@ -2,6 +2,7 @@ package com.formshq.dto.dashboard;
 
 import com.formshq.dto.evaluation.EvaluationResponse;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -22,4 +23,4 @@ public record DashboardSummaryResponse(
         List<SectorPerformanceDto> sectorAverages,
         List<CriteriaPerformanceDto> criteriaComparison,
         List<EvaluationResponse> recentEvaluations
-) {}
+) implements Serializable {}

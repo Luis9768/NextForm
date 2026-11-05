@@ -2,6 +2,7 @@ package com.formshq.dto.customer;
 
 import com.formshq.domain.entity.Customer;
 
+import java.io.Serializable;
 import java.util.UUID;
 
 public record CustomerDto(
@@ -22,7 +23,7 @@ public record CustomerDto(
         String dueDate,
         String earlyPortability,
         String protocol
-) {
+) implements Serializable {
     public static CustomerDto fromEntity(Customer customer) {
         if (customer == null) return null;
         return new CustomerDto(

@@ -1,5 +1,6 @@
 package com.formshq.service;
 
+import com.formshq.config.CacheConfig;
 import com.formshq.domain.entity.*;
 import com.formshq.domain.enums.CallStatus;
 import com.formshq.domain.enums.EvaluationStatus;
@@ -17,6 +18,8 @@ import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +47,10 @@ public class EvaluationService {
     private final SectorScopePolicy sectorScopePolicy;
 
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public EvaluationResponse submitEvaluation(CreateEvaluationRequest request, UserPrincipal evaluatorPrincipal) {
         if (!evaluatorPrincipal.isGestor()) {
             throw new AccessDeniedException("Apenas usuários com perfil GESTOR podem avaliar ligações.");
@@ -189,6 +196,10 @@ public class EvaluationService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(
+            value = CacheConfig.CACHE_EVALUATIONS,
+            key = "#currentUser.id + ':' + (#analystIdFilter ?: 'ALL') + ':' + (#codeFilter ?: '') + ':' + (#analystNameFilter ?: '') + ':' + (#sectorFilter ?: '') + ':' + (#startDate ?: '') + ':' + (#endDate ?: '')"
+    )
     public List<EvaluationResponse> listEvaluations(
             UserPrincipal currentUser,
             UUID analystIdFilter,
@@ -201,11 +212,11 @@ public class EvaluationService {
         List<Evaluation> evaluations;
 
         if (currentUser.isAnalista()) {
-            evaluations = evaluationRepository.findByAnalystIdOrderByEvaluatedAtDesc(currentUser.getId());
+            evaluations = evaluationRepository.findSummaryByAnalystIdOrderByEvaluatedAtDesc(currentUser.getId());
         } else if (analystIdFilter != null) {
-            evaluations = evaluationRepository.findByAnalystIdOrderByEvaluatedAtDesc(analystIdFilter);
+            evaluations = evaluationRepository.findSummaryByAnalystIdOrderByEvaluatedAtDesc(analystIdFilter);
         } else {
-            evaluations = evaluationRepository.findAllByOrderByEvaluatedAtDesc();
+            evaluations = evaluationRepository.findAllSummaryByOrderByEvaluatedAtDesc();
         }
 
         if (!currentUser.isAdmin() && currentUser.isGestor()) {
@@ -261,7 +272,7 @@ public class EvaluationService {
         }
 
         return evaluations.stream()
-                .map(EvaluationResponse::fromEntity)
+                .map(EvaluationResponse::fromEntityListSummary)
                 .toList();
     }
 

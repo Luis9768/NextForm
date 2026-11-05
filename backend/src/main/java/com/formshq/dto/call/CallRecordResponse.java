@@ -7,8 +7,10 @@ import com.formshq.domain.enums.EvaluationStatus;
 import com.formshq.dto.auth.UserSummaryDto;
 import com.formshq.dto.customer.CustomerDto;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -30,9 +32,26 @@ public record CallRecordResponse(
         EvaluationStatus evaluationStatus,
         Boolean fatalErrorTriggered,
         OffsetDateTime createdAt
-) {
+) implements Serializable {
     public static CallRecordResponse fromEntity(CallRecord callRecord) {
+        return buildResponse(callRecord, false);
+    }
+
+    public static CallRecordResponse fromEntitySummary(CallRecord callRecord) {
+        return buildResponse(callRecord, true);
+    }
+
+    private static CallRecordResponse buildResponse(CallRecord callRecord, boolean omitLargeTranscript) {
+        if (callRecord == null) {
+            return null;
+        }
         Evaluation eval = callRecord.getEvaluation();
+        Map<String, Object> rawMeta = callRecord.getMetadata();
+        Map<String, Object> finalMeta = rawMeta;
+        if (omitLargeTranscript && rawMeta != null && rawMeta.containsKey("transcricao")) {
+            finalMeta = new LinkedHashMap<>(rawMeta);
+            finalMeta.remove("transcricao");
+        }
         return new CallRecordResponse(
                 callRecord.getId(),
                 callRecord.getExternalCallId(),
@@ -45,7 +64,7 @@ public record CallRecordResponse(
                 callRecord.getStatus(),
                 callRecord.getChannel(),
                 callRecord.getCampaign(),
-                callRecord.getMetadata(),
+                finalMeta,
                 eval != null ? eval.getId() : null,
                 eval != null ? eval.getFinalScorePercentage() : null,
                 eval != null ? eval.getStatus() : null,

@@ -1,5 +1,6 @@
 package com.formshq.service;
 
+import com.formshq.config.CacheConfig;
 import com.formshq.domain.entity.CallRecord;
 import com.formshq.domain.entity.Evaluation;
 import com.formshq.domain.entity.EvaluationItemSnapshot;
@@ -15,6 +16,7 @@ import com.formshq.repository.UserRepository;
 import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,6 +45,10 @@ public class DashboardService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(
+            value = CacheConfig.CACHE_DASHBOARD,
+            key = "#currentUser.id + ':' + (#sectorFilter ?: 'ALL') + ':' + (#analystIdFilter ?: 'ALL') + ':' + (#startDate ?: '') + ':' + (#endDate ?: '')"
+    )
     public DashboardSummaryResponse getSummary(
             UserPrincipal currentUser,
             String sectorFilter,
@@ -198,7 +204,7 @@ public class DashboardService {
 
         List<EvaluationResponse> recentEvaluations = evaluations.stream()
                 .limit(100)
-                .map(EvaluationResponse::fromEntity)
+                .map(EvaluationResponse::fromEntityDashboardSummary)
                 .toList();
 
         return new DashboardSummaryResponse(

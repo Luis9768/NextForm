@@ -11,3 +11,12 @@ spring:
   h2:
     console:
       enabled: false
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+
+app:
+  cache:
+    redis-enabled: ${REDIS_ENABLED:true}

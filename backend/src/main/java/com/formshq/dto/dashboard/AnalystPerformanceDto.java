@@ -1,5 +1,6 @@
 package com.formshq.dto.dashboard;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.UUID;
 
@@ -15,4 +16,4 @@ public record AnalystPerformanceDto(
         long approvedCount,
         long failedCount,
         long fatalErrorCount
-) {}
+) implements Serializable {}

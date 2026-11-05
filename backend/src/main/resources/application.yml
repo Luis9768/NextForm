@@ -26,11 +26,27 @@ spring:
     console:
       enabled: true
       path: /h2-console
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+
+management:
+  health:
+    redis:
+      enabled: false
 
 server:
   port: ${SERVER_PORT:8080}
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain,text/css,application/javascript
+    min-response-size: 1024
 
 app:
+  cache:
+    redis-enabled: ${REDIS_ENABLED:false}
   security:
     jwt:
       secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}

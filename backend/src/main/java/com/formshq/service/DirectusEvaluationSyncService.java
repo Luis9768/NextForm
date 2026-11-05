@@ -3,6 +3,7 @@ package com.formshq.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.formshq.config.CacheConfig;
 import com.formshq.domain.entity.*;
 import com.formshq.domain.enums.CallStatus;
 import com.formshq.domain.enums.EvaluationStatus;
@@ -15,6 +16,7 @@ import com.formshq.exception.BusinessRuleException;
 import com.formshq.repository.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -129,6 +131,10 @@ public class DirectusEvaluationSyncService {
      * e apaga todos os usuários fictícios, ligações de exemplo, formulários de teste e avaliações locais.
      */
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     @SuppressWarnings("unchecked")
     public DirectusUserSyncResultDto syncUsersAndPurgeFictionalData(String customBaseUrl, String customApiToken) {
         String baseUrl = firstNonBlank(customBaseUrl, configuredDirectusBaseUrl);
@@ -455,6 +461,10 @@ public class DirectusEvaluationSyncService {
      * GET {baseUrl}/items/{collection}/{itemId}?fields=*.*
      */
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public DirectusSyncResultDto pullSingleItemFromDirectus(
             String collection,
             String itemId,
@@ -510,6 +520,10 @@ public class DirectusEvaluationSyncService {
      * Puxa avaliações diretamente da API REST do Directus (/items/{collection}?fields=*.*)
      */
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public DirectusSyncResultDto pullFromDirectusApi(DirectusPullRequest request) {
         String baseUrl = firstNonBlank(
                 request != null ? request.baseUrl() : null,
@@ -581,6 +595,10 @@ public class DirectusEvaluationSyncService {
      * Importa um lote JSON de avaliações (vindo de exportação do Directus, Webhook Flow ou Postman)
      */
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public DirectusSyncResultDto importBatch(DirectusBatchImportRequest request) {
         if (request == null || request.items() == null || request.items().isEmpty()) {
             throw new BusinessRuleException("A lista 'items' não pode estar vazia para importação.");
