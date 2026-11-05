@@ -12,6 +12,7 @@ import com.formshq.dto.evaluation.EvaluationResponse;
 import com.formshq.repository.CallRecordRepository;
 import com.formshq.repository.EvaluationRepository;
 import com.formshq.repository.UserRepository;
+import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,7 @@ public class DashboardService {
     private final CallRecordRepository callRecordRepository;
     private final EvaluationRepository evaluationRepository;
     private final UserRepository userRepository;
+    private final SectorScopePolicy sectorScopePolicy;
 
     @Transactional(readOnly = true)
     public DashboardSummaryResponse getSummary(UserPrincipal currentUser) {
@@ -62,31 +64,22 @@ public class DashboardService {
             evaluations = evaluationRepository.findAllByOrderByEvaluatedAtDesc();
             analysts = userRepository.findByRoleOrderByNameAsc(Role.ROLE_ANALISTA);
 
-            // Escopo de setores para Gestor (Admin vê todos os setores)
             if (!currentUser.isAdmin() && currentUser.isGestor()) {
-                User manager = userRepository.findById(currentUser.getId()).orElse(null);
-                if (manager != null && manager.getAllowedSectors() != null && !manager.getAllowedSectors().isBlank()) {
-                    Set<String> allowed = Arrays.stream(manager.getAllowedSectors().split(","))
-                            .map(s -> s.trim().toLowerCase())
-                            .filter(s -> !s.isEmpty())
-                            .collect(Collectors.toSet());
-                    if (!allowed.isEmpty()) {
-                        analysts = analysts.stream()
-                                .filter(a -> a.getDepartment() != null && allowed.contains(a.getDepartment().trim().toLowerCase()))
-                                .toList();
-                        evaluations = evaluations.stream()
-                                .filter(e -> allowed.contains(resolveEvaluationSector(e).toLowerCase()))
-                                .toList();
-                        calls = calls.stream()
-                                .filter(c -> c.getAnalyst() != null && c.getAnalyst().getDepartment() != null
-                                        && allowed.contains(c.getAnalyst().getDepartment().trim().toLowerCase()))
-                                .toList();
-                    }
+                Set<String> allowed = sectorScopePolicy.resolveAllowedSectorsForCaller(currentUser);
+                if (!allowed.isEmpty()) {
+                    analysts = analysts.stream()
+                            .filter(a -> sectorScopePolicy.isSectorAllowed(allowed, a.getDepartment()))
+                            .toList();
+                    evaluations = evaluations.stream()
+                            .filter(e -> sectorScopePolicy.isSectorAllowed(allowed, sectorScopePolicy.resolveEvaluationSector(e)))
+                            .toList();
+                    calls = calls.stream()
+                            .filter(c -> c.getAnalyst() != null && sectorScopePolicy.isSectorAllowed(allowed, c.getAnalyst().getDepartment()))
+                            .toList();
                 }
             }
         }
 
-        // Calcula médias gerais por setor antes de aplicar o filtro de setor único, ou dentro do escopo permitido
         List<SectorPerformanceDto> sectorAverages = buildSectorAverages(evaluations);
 
         if (sectorFilter != null && !sectorFilter.isBlank() && !currentUser.isAnalista()) {
@@ -95,7 +88,7 @@ public class DashboardService {
                     .filter(a -> a.getDepartment() != null && a.getDepartment().trim().equalsIgnoreCase(sec))
                     .toList();
             evaluations = evaluations.stream()
-                    .filter(e -> resolveEvaluationSector(e).equalsIgnoreCase(sec))
+                    .filter(e -> sectorScopePolicy.resolveEvaluationSector(e).equalsIgnoreCase(sec))
                     .toList();
             calls = calls.stream()
                     .filter(c -> c.getAnalyst() != null && c.getAnalyst().getDepartment() != null
@@ -230,7 +223,7 @@ public class DashboardService {
 
     private List<SectorPerformanceDto> buildSectorAverages(List<Evaluation> evaluations) {
         Map<String, List<Evaluation>> bySector = evaluations.stream()
-                .collect(Collectors.groupingBy(this::resolveEvaluationSector, LinkedHashMap::new, Collectors.toList()));
+                .collect(Collectors.groupingBy(sectorScopePolicy::resolveEvaluationSector, LinkedHashMap::new, Collectors.toList()));
 
         List<SectorPerformanceDto> result = new ArrayList<>();
         for (Map.Entry<String, List<Evaluation>> entry : bySector.entrySet()) {
@@ -301,15 +294,5 @@ public class DashboardService {
             points.add(new ScoreTimelinePointDto(entry.getKey(), avg, dayEvals.size()));
         }
         return points;
-    }
-
-    private String resolveEvaluationSector(Evaluation e) {
-        if (e.getAnalystSectorSnapshot() != null && !e.getAnalystSectorSnapshot().isBlank()) {
-            return e.getAnalystSectorSnapshot().trim();
-        }
-        if (e.getAnalyst() != null && e.getAnalyst().getDepartment() != null) {
-            return e.getAnalyst().getDepartment().trim();
-        }
-        return "Geral";
     }
 }

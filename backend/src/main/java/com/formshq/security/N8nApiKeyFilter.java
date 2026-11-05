@@ -27,6 +27,7 @@ public class N8nApiKeyFilter extends OncePerRequestFilter {
 
     public static final String API_KEY_HEADER = "X-API-KEY";
     private static final String N8N_PATH_PREFIX = "/api/v1/integrations/n8n";
+    private static final String DIRECTUS_PATH_PREFIX = "/api/v1/integrations/directus";
 
     private final String expectedApiKey;
     private final ObjectMapper objectMapper;
@@ -41,11 +42,21 @@ public class N8nApiKeyFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
         String path = request.getServletPath();
         if (path == null || path.isEmpty()) {
             path = request.getRequestURI();
         }
-        return !path.startsWith(N8N_PATH_PREFIX) || "OPTIONS".equalsIgnoreCase(request.getMethod());
+        if (path.startsWith(N8N_PATH_PREFIX)) {
+            return false;
+        }
+        if (path.startsWith(DIRECTUS_PATH_PREFIX)) {
+            String providedKey = request.getHeader(API_KEY_HEADER);
+            return providedKey == null || providedKey.isBlank();
+        }
+        return true;
     }
 
     @Override
@@ -64,7 +75,7 @@ public class N8nApiKeyFilter extends OncePerRequestFilter {
             Map<String, Object> errorBody = Map.of(
                     "status", HttpStatus.UNAUTHORIZED.value(),
                     "error", "Unauthorized",
-                    "message", "Header X-API-KEY ausente ou inválido para integração n8n.",
+                    "message", "Header X-API-KEY ausente ou inválido para integração.",
                     "path", request.getRequestURI(),
                     "timestamp", OffsetDateTime.now().toString()
             );
@@ -75,7 +86,10 @@ public class N8nApiKeyFilter extends OncePerRequestFilter {
         UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                 "n8n-integration-agent",
                 null,
-                List.of(new SimpleGrantedAuthority("ROLE_N8N_INTEGRATION"))
+                List.of(
+                        new SimpleGrantedAuthority("ROLE_N8N_INTEGRATION"),
+                        new SimpleGrantedAuthority("ROLE_GESTOR")
+                )
         );
         SecurityContextHolder.getContext().setAuthentication(authentication);
 

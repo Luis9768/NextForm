@@ -44,8 +44,21 @@ export function CallAudioPlayer({
     audioUrl.includes("storage.empresa.com") ||
     audioUrl.includes("example.com");
 
+  const resolvedAudioUrl = (() => {
+    if (!audioUrl) return fallbackStreamUrl;
+    if (audioUrl.startsWith("http://localhost:8080/api/v1")) {
+      return `${API_BASE_URL}${audioUrl.substring("http://localhost:8080/api/v1".length)}`;
+    }
+    if (audioUrl.startsWith("/api/v1")) {
+      return `${API_BASE_URL}${audioUrl.substring("/api/v1".length)}`;
+    }
+    return audioUrl;
+  })();
+
   const effectiveSrc =
-    usingFallbackStream || isMockExternalHost ? fallbackStreamUrl : audioUrl;
+    usingFallbackStream || isMockExternalHost
+      ? fallbackStreamUrl
+      : resolvedAudioUrl;
 
   useEffect(() => {
     setIsPlaying(false);

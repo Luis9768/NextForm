@@ -113,15 +113,21 @@ export default function DashboardPage() {
   const coverageRate =
     totalCalls > 0 ? (evaluatedCalls / totalCalls) * 100 : 0;
 
-  // Série cronológica de avaliações reais para o Area Chart principal e Sparkline
+  // Série cronológica de avaliações reais para o Area Chart principal e Sparkline (últimas 15 para legibilidade)
   const chronologicalEvaluations = useMemo(() => {
     const list = [...(summary?.recentEvaluations ?? [])];
     list.sort(
       (a, b) =>
         new Date(a.evaluatedAt).getTime() - new Date(b.evaluatedAt).getTime()
     );
-    return list;
+    return list.slice(-15);
   }, [summary?.recentEvaluations]);
+
+  const sortedAnalystsDropdown = useMemo(() => {
+    return [...(summary?.analystRanking ?? [])].sort((a, b) =>
+      a.analystName.localeCompare(b.analystName, "pt-BR")
+    );
+  }, [summary?.analystRanking]);
 
   // Pontos normalizados do gráfico principal (SVG 720x220)
   const mainChartData = useMemo(() => {
@@ -219,17 +225,9 @@ export default function DashboardPage() {
             <div className="h-9 w-9 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-100">
               <Activity className="h-4 w-4" />
             </div>
-            <div>
-              <h1 className="text-base sm:text-lg font-bold tracking-tight text-zinc-100">
-                {isGestor
-                  ? "Overview Analítico de Qualidade"
-                  : "Meu Desempenho em Tempo Real"}
-              </h1>
-              <p className="text-xs text-zinc-400">
-                Gráficos alimentados em tempo real pelas auditorias e gravações
-                do sistema
-              </p>
-            </div>
+            <h1 className="text-base sm:text-lg font-bold tracking-tight text-zinc-100">
+              {isGestor ? "Dashboard" : "Meu Desempenho"}
+            </h1>
           </div>
 
           {isGestor && (
@@ -251,15 +249,6 @@ export default function DashboardPage() {
                   <option value="Cobrança & Retenção" className="bg-[#0b0b0d]">
                     Cobrança & Retenção
                   </option>
-                  <option value="Suporte N1" className="bg-[#0b0b0d]">
-                    Suporte N1
-                  </option>
-                  <option
-                    value="Retenção & Ouvidoria"
-                    className="bg-[#0b0b0d]"
-                  >
-                    Retenção & Ouvidoria
-                  </option>
                   <option value="Aquisição" className="bg-[#0b0b0d]">
                     Aquisição
                   </option>
@@ -277,7 +266,7 @@ export default function DashboardPage() {
                   <option value="" className="bg-[#0b0b0d]">
                     Todos os Analistas
                   </option>
-                  {summary?.analystRanking.map((a) => (
+                  {sortedAnalystsDropdown.map((a) => (
                     <option
                       key={a.analystId}
                       value={a.analystId}
@@ -612,9 +601,9 @@ export default function DashboardPage() {
             {/* ================================================================
                 ROW 2: SHADCN MAIN INTERACTIVE CHART (8 COLS) + RANKING (4 COLS)
                ================================================================ */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
               {/* Left 8 Cols: Interactive Animated Chart (Area / Sectors / Criteria) */}
-              <div className="lg:col-span-8 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col justify-between space-y-5">
+              <div className="lg:col-span-8 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col space-y-5">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800/80 pb-4">
                   <div>
                     <h2 className="text-sm sm:text-base font-semibold text-zinc-100">
@@ -965,7 +954,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Right 4 Cols: Shadcn "Recent Sales" Style Ranking & Quick Evaluate */}
-              <div className="lg:col-span-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col justify-between space-y-4">
+              <div className="lg:col-span-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col space-y-4">
                 <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3.5">
                   <div>
                     <h2 className="text-sm sm:text-base font-semibold text-zinc-100">
@@ -986,7 +975,7 @@ export default function DashboardPage() {
                   )}
                 </div>
 
-                <div className="space-y-3 flex-1">
+                <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
                   {summary.analystRanking.map((analyst, idx) => {
                     const score = Number(analyst.averageScore);
                     return (
@@ -1132,153 +1121,191 @@ export default function DashboardPage() {
               </div>
 
               {activeTab === "evaluations" ? (
-                <div className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[780px] text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-zinc-800 text-xs font-medium text-zinc-400 bg-[#101013]">
-                          <th className="py-3.5 px-6">Protocolo</th>
-                          <th className="py-3.5 px-4">Analista & Setor</th>
-                          <th className="py-3.5 px-4">Formulário (Snapshot)</th>
-                          <th className="py-3.5 px-4 text-center">Status</th>
-                          <th className="py-3.5 px-4 text-right">Pontos</th>
-                          <th className="py-3.5 px-4 text-right">Nota Final</th>
-                          <th className="py-3.5 px-6 text-right">Ações</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-800/80 text-sm">
-                        {filteredEvaluationsTable.map((ev) => {
-                          const badge = getEvaluationStatusBadge(ev.status);
-                          return (
-                            <tr
-                              key={ev.id}
-                              className="hover:bg-zinc-900/50 transition-colors"
-                            >
-                              <td className="py-3.5 px-6 font-mono text-xs font-semibold text-zinc-100">
-                                #{ev.callRecord.externalCallId}
-                                <span className="block text-[11px] font-sans font-normal text-zinc-500">
-                                  {formatDateTime(ev.evaluatedAt)}
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-4">
-                                <span className="font-medium text-zinc-100 text-xs block">
-                                  {ev.analyst.name}
-                                </span>
-                                <span className="text-[11px] font-mono text-zinc-400">
-                                  {ev.analystSectorSnapshot ||
-                                    ev.analyst.department}
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-4 text-xs text-zinc-300">
-                                {ev.formNameSnapshot}{" "}
-                                <span className="text-zinc-500">
-                                  (v{ev.formVersionSnapshot})
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-4 text-center">
-                                <span
-                                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs ${badge.className}`}
-                                >
-                                  {badge.label}
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-4 text-right font-mono text-xs text-zinc-300">
-                                {ev.obtainedPoints}/{ev.maxPossiblePoints}
-                              </td>
-                              <td className="py-3.5 px-4 text-right font-mono font-bold text-sm text-zinc-100">
-                                {Number(ev.finalScorePercentage).toFixed(1)}%
-                              </td>
-                              <td className="py-3.5 px-6 text-right">
-                                <div className="inline-flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setSelectedEvaluationModal(ev)
-                                    }
-                                    className="px-2.5 py-1.5 rounded-lg border border-zinc-800 hover:bg-zinc-800 text-xs font-medium text-zinc-200 transition-colors inline-flex items-center gap-1"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    <span>Áudio</span>
-                                  </button>
-                                  <Link
-                                    href={`/evaluations/${ev.id}`}
-                                    className="px-2.5 py-1.5 rounded-lg bg-zinc-100 text-zinc-950 text-xs font-semibold hover:bg-zinc-200 transition-colors inline-flex items-center gap-1"
-                                  >
-                                    <ClipboardCheck className="h-3.5 w-3.5" />
-                                    <span>Espelho</span>
-                                  </Link>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                <div className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] divide-y divide-zinc-800/60 overflow-hidden">
+                  <div className="hidden lg:grid lg:grid-cols-[176px_minmax(0,1.45fr)_minmax(0,1.25fr)_96px_138px_56px_168px] lg:items-center lg:gap-3 px-5 py-2.5 bg-[#09090b] text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+                    <span>Código / ID</span>
+                    <span>Operador & Setor</span>
+                    <span>Matriz & Data</span>
+                    <span className="text-right">Pontos</span>
+                    <span className="text-center">Status</span>
+                    <span className="text-right">Nota</span>
+                    <span className="text-right">Ações</span>
                   </div>
+
+                  {filteredEvaluationsTable.map((ev) => {
+                    const badge = getEvaluationStatusBadge(ev.status);
+                    const sectorLabel =
+                      ev.analystSectorSnapshot ||
+                      ev.analyst.department ||
+                      "Geral";
+                    const initials = (ev.analyst.name || "OP")
+                      .split(" ")
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((w) => w[0]?.toUpperCase())
+                      .join("");
+
+                    return (
+                      <div
+                        key={ev.id}
+                        className="p-4 sm:px-5 sm:py-3 hover:bg-zinc-900/40 transition-colors flex flex-col lg:grid lg:grid-cols-[176px_minmax(0,1.45fr)_minmax(0,1.25fr)_96px_138px_56px_168px] lg:items-center gap-3"
+                      >
+                        {/* Coluna 1: Código / ID */}
+                        <div className="min-w-0">
+                          <span
+                            title={`#${ev.callRecord.externalCallId}`}
+                            className="inline-block max-w-full truncate px-2.5 py-1 rounded-md bg-[#141418] border border-zinc-800 font-mono text-[11px] font-semibold text-zinc-200"
+                          >
+                            #{ev.callRecord.externalCallId}
+                          </span>
+                        </div>
+
+                        {/* Coluna 2: Operador & Setor */}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="h-8 w-8 rounded-lg bg-[#15151a] border border-zinc-800 flex items-center justify-center text-[11px] font-mono font-semibold text-zinc-200 shrink-0">
+                            {initials}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-zinc-100 truncate">
+                              {ev.analyst.name}
+                            </p>
+                            <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded bg-[#141418] border border-zinc-800/90 text-[10px] font-mono text-zinc-400 truncate max-w-full">
+                              {sectorLabel}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Coluna 3: Matriz & Data */}
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-zinc-200 truncate">
+                            {ev.formNameSnapshot}
+                          </p>
+                          <p className="text-[11px] font-mono text-zinc-500 truncate mt-0.5">
+                            {formatDateTime(ev.evaluatedAt)}
+                          </p>
+                        </div>
+
+                        {/* Coluna 4: Pontos */}
+                        <div className="flex items-center justify-between lg:justify-end">
+                          <span className="text-[10px] font-mono uppercase text-zinc-500 lg:hidden">
+                            Pontos
+                          </span>
+                          <span className="font-mono text-xs text-zinc-400">
+                            {ev.obtainedPoints}/{ev.maxPossiblePoints} pts
+                          </span>
+                        </div>
+
+                        {/* Coluna 5: Status */}
+                        <div className="flex items-center justify-between lg:justify-center">
+                          <span className="text-[10px] font-mono uppercase text-zinc-500 lg:hidden">
+                            Status
+                          </span>
+                          <span
+                            className={`inline-flex items-center justify-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] whitespace-nowrap ${badge.className}`}
+                          >
+                            {badge.label}
+                          </span>
+                        </div>
+
+                        {/* Coluna 6: Nota */}
+                        <div className="flex items-center justify-between lg:justify-end">
+                          <span className="text-[10px] font-mono uppercase text-zinc-500 lg:hidden">
+                            Nota
+                          </span>
+                          <span className="font-mono font-bold text-sm text-zinc-100">
+                            {Number(ev.finalScorePercentage).toFixed(0)}%
+                          </span>
+                        </div>
+
+                        {/* Coluna 7: Ações */}
+                        <div className="flex items-center justify-end gap-1.5 pt-2 lg:pt-0 border-t lg:border-t-0 border-zinc-800/50">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedEvaluationModal(ev)}
+                            className="h-8 px-2.5 rounded-md border border-zinc-800 bg-[#141418] hover:bg-zinc-800 text-xs font-medium text-zinc-200 transition-colors inline-flex items-center gap-1.5"
+                          >
+                            <Headphones className="h-3.5 w-3.5" />
+                            <span>Ouvir</span>
+                          </button>
+                          <Link
+                            href={`/evaluations/${ev.id}`}
+                            className="h-8 px-2.5 rounded-md bg-zinc-100 text-zinc-950 text-xs font-semibold hover:bg-zinc-200 transition-colors inline-flex items-center gap-1.5"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            <span>Espelho</span>
+                          </Link>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
-                <div className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[720px] text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-zinc-800 text-xs font-medium text-zinc-400 bg-[#101013]">
-                          <th className="py-3.5 px-6">Analista</th>
-                          <th className="py-3.5 px-4">Setor</th>
-                          <th className="py-3.5 px-4 text-center">
-                            Avaliadas / Pendentes
-                          </th>
-                          <th className="py-3.5 px-4 text-center">Aprovadas</th>
-                          <th className="py-3.5 px-4 text-center">
-                            Erro Grave
-                          </th>
-                          <th className="py-3.5 px-6 text-right">Nota Média</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-800/80 text-sm">
-                        {summary.analystRanking.map((analyst) => (
-                          <tr
-                            key={analyst.analystId}
-                            className="hover:bg-zinc-900/50"
-                          >
-                            <td className="py-3.5 px-6">
-                              <span className="font-medium text-zinc-100 text-xs block">
-                                {analyst.analystName}
-                              </span>
-                              <span className="text-[11px] text-zinc-500">
-                                {analyst.analystEmail}
-                              </span>
-                            </td>
-                            <td className="py-3.5 px-4 text-xs text-zinc-400">
-                              {analyst.department}
-                            </td>
-                            <td className="py-3.5 px-4 text-center text-xs text-zinc-400">
-                              {analyst.evaluatedCalls} avaliadas /{" "}
-                              {analyst.pendingCalls} pendentes
-                            </td>
-                            <td className="py-3.5 px-4 text-center text-xs font-semibold text-zinc-200">
-                              {analyst.approvedCount}
-                            </td>
-                            <td className="py-3.5 px-4 text-center text-xs font-semibold text-red-400">
-                              {analyst.fatalErrorCount}
-                            </td>
-                            <td className="py-3.5 px-6 text-right font-mono font-bold text-sm text-zinc-100">
-                              <div className="inline-flex items-center gap-3">
-                                <span>
-                                  {Number(analyst.averageScore).toFixed(1)}%
-                                </span>
-                                <Link
-                                  href={`/analysts/${analyst.analystId}`}
-                                  className="px-2.5 py-1 rounded-lg bg-zinc-100 text-zinc-950 font-sans font-semibold text-xs hover:bg-zinc-200 transition-colors"
-                                >
-                                  Avaliar
-                                </Link>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                <div className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] divide-y divide-zinc-800/60 overflow-hidden">
+                  <div className="hidden lg:grid lg:grid-cols-[minmax(0,1.5fr)_140px_100px_100px_100px_90px_110px] lg:items-center lg:gap-3 px-5 py-2.5 bg-[#09090b] text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+                    <span>Operador</span>
+                    <span>Setor</span>
+                    <span className="text-right">Avaliadas</span>
+                    <span className="text-right">Aprovadas</span>
+                    <span className="text-right">Falta Grave</span>
+                    <span className="text-right">Média</span>
+                    <span className="text-right">Ação</span>
                   </div>
+
+                  {summary.analystRanking.map((analyst) => {
+                    const initials = (analyst.analystName || "OP")
+                      .split(" ")
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((w) => w[0]?.toUpperCase())
+                      .join("");
+
+                    return (
+                      <div
+                        key={analyst.analystId}
+                        className="p-4 sm:px-5 sm:py-3 hover:bg-zinc-900/40 transition-colors flex flex-col lg:grid lg:grid-cols-[minmax(0,1.5fr)_140px_100px_100px_100px_90px_110px] lg:items-center gap-3"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="h-8 w-8 rounded-lg bg-[#15151a] border border-zinc-800 flex items-center justify-center text-[11px] font-mono font-semibold text-zinc-200 shrink-0">
+                            {initials}
+                          </div>
+                          <span className="font-semibold text-zinc-100 text-xs truncate">
+                            {analyst.analystName}
+                          </span>
+                        </div>
+
+                        <div>
+                          <span className="px-2 py-0.5 rounded bg-[#141418] border border-zinc-800 text-[10px] font-mono text-zinc-300">
+                            {analyst.department}
+                          </span>
+                        </div>
+
+                        <div className="text-right font-mono text-xs tabular-nums text-zinc-300">
+                          {analyst.evaluatedCalls}
+                        </div>
+
+                        <div className="text-right font-mono text-xs tabular-nums text-emerald-400">
+                          {analyst.approvedCount}
+                        </div>
+
+                        <div className="text-right font-mono text-xs tabular-nums text-zinc-400">
+                          {analyst.fatalErrorCount}
+                        </div>
+
+                        <div className="text-right font-mono font-bold text-sm tabular-nums text-zinc-100">
+                          {Number(analyst.averageScore).toFixed(1)}%
+                        </div>
+
+                        <div className="flex justify-end">
+                          <Link
+                            href={`/analysts/${analyst.analystId}`}
+                            className="h-8 px-3 rounded-md bg-zinc-100 text-zinc-950 font-semibold text-xs hover:bg-zinc-200 transition-colors inline-flex items-center"
+                          >
+                            Avaliar
+                          </Link>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

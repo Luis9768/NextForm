@@ -26,6 +26,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 
+import java.net.InetAddress;
+import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.*;
 
@@ -40,6 +42,8 @@ public class CustomerLookupService {
     private final RestClient restClient;
     private final boolean externalApiEnabled;
     private final String defaultWebhookUrl;
+    private final String directusBaseUrl;
+    private final String directusApiToken;
 
     public CustomerLookupService(
             CustomerRepository customerRepository,
@@ -49,7 +53,9 @@ public class CustomerLookupService {
             @Value("${app.integrations.customer-api.base-url:https://api.crm-externo.empresa.com/v1}") String baseUrl,
             @Value("${app.integrations.customer-api.api-token:crm-external-bearer-token-2026}") String apiToken,
             @Value("${app.integrations.customer-api.enabled:false}") boolean externalApiEnabled,
-            @Value("${app.integrations.customer-webhook.url:${CUSTOMER_WEBHOOK_URL:}}") String defaultWebhookUrl
+            @Value("${app.integrations.customer-webhook.url:${CUSTOMER_WEBHOOK_URL:}}") String defaultWebhookUrl,
+            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String directusBaseUrl,
+            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String directusApiToken
     ) {
         this.customerRepository = customerRepository;
         this.callRecordRepository = callRecordRepository;
@@ -57,6 +63,8 @@ public class CustomerLookupService {
         this.objectMapper = objectMapper;
         this.externalApiEnabled = externalApiEnabled;
         this.defaultWebhookUrl = defaultWebhookUrl;
+        this.directusBaseUrl = directusBaseUrl;
+        this.directusApiToken = directusApiToken;
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiToken)
@@ -99,16 +107,12 @@ public class CustomerLookupService {
                 ? request.name().trim()
                 : ("NOME".equals(detectedType) ? cleanValue : "");
 
-        String targetWebhook = (request.webhookUrl() != null && !request.webhookUrl().isBlank())
-                ? request.webhookUrl().trim()
-                : (defaultWebhookUrl != null && !defaultWebhookUrl.isBlank() ? defaultWebhookUrl.trim() : null);
-
+        String targetWebhook = resolveSafeWebhookUrl(request.webhookUrl());
         String source = "WEBHOOK_CRM_SYNC (" + detectedType + ")";
 
-        if (targetWebhook != null && (targetWebhook.startsWith("http://") || targetWebhook.startsWith("https://"))) {
+        if (targetWebhook != null) {
             try {
                 Map<String, Object> webhookPayload = new LinkedHashMap<>();
-                // Parâmetros principais solicitados: telefone, cpf, nome_da_mae, nome_do_pai, nome
                 webhookPayload.put("telefone", !cleanPhone.isEmpty() ? cleanPhone : cleanValue);
                 webhookPayload.put("cpf", !paramCpf.isEmpty() ? paramCpf : (!digitsOnlyKey.isEmpty() ? digitsOnlyKey : cleanValue));
                 webhookPayload.put("nome_da_mae", paramMotherName);
@@ -116,7 +120,6 @@ public class CustomerLookupService {
                 webhookPayload.put("nome", paramPersonName);
                 webhookPayload.put("nome_da_pessoa", paramPersonName);
 
-                // Aliases para compatibilidade com nós do n8n / Directus
                 webhookPayload.put("CPF", !paramCpf.isEmpty() ? paramCpf : (!digitsOnlyKey.isEmpty() ? digitsOnlyKey : cleanValue));
                 webhookPayload.put("Nome_da_mae", paramMotherName);
                 webhookPayload.put("Nome_do_pai", paramFatherName);
@@ -158,10 +161,51 @@ public class CustomerLookupService {
                     return new CustomerLookupResponse(CustomerDto.fromEntity(synced), source, calls);
                 }
             } catch (Exception e) {
-                log.warn("Webhook externo ({}) indisponível ou sem retorno para key={}: {}. Utilizando base local.",
+                log.warn("Webhook externo ({}) indisponível ou sem retorno para key={}: {}. Tentando fallback Directus.",
                         targetWebhook, cleanValue, e.getMessage());
             }
-        } else if (externalApiEnabled) {
+        }
+
+        // Fallback direto na API REST do Directus (quando configurado no .env)
+        if (directusBaseUrl != null && !directusBaseUrl.isBlank() && !cleanPhone.isEmpty()) {
+            try {
+                String cleanDirBase = directusBaseUrl.trim().replaceAll("/+$", "");
+                RestClient.Builder dirBuilder = RestClient.builder()
+                        .baseUrl(cleanDirBase)
+                        .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE);
+                if (directusApiToken != null && !directusApiToken.isBlank()) {
+                    dirBuilder.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + directusApiToken.trim());
+                }
+                String dirRaw = dirBuilder.build()
+                        .get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/items/Monitoria_Tim_Aquisicao")
+                                .queryParam("filter[Telefone_Portabilidade][_contains]", cleanPhone)
+                                .queryParam("limit", 1)
+                                .build())
+                        .retrieve()
+                        .body(String.class);
+
+                Map<String, Object> dirMap = parseDirectusFirstItemToMap(dirRaw);
+                if (hasMeaningfulContactData(dirMap)) {
+                    Customer synced = syncCustomerFromExternalMap(
+                            cleanPhone,
+                            dirMap,
+                            paramPersonName,
+                            paramCpf,
+                            paramMotherName,
+                            paramFatherName
+                    );
+                    source = "DIRECTUS_REST_API";
+                    List<CallRecordResponse> calls = findOrProvisionCallsForCustomer(synced, synced.getPhone(), request.analystId());
+                    return new CustomerLookupResponse(CustomerDto.fromEntity(synced), source, calls);
+                }
+            } catch (Exception e) {
+                log.debug("Fallback Directus sem retorno para phone={}: {}", cleanPhone, e.getMessage());
+            }
+        }
+
+        if (externalApiEnabled) {
             try {
                 Map<String, Object> externalData = restClient.get()
                         .uri(uriBuilder -> uriBuilder
@@ -209,6 +253,55 @@ public class CustomerLookupService {
         return new CustomerLookupResponse(CustomerDto.fromEntity(customer), source, recordings);
     }
 
+    /**
+     * Valida a URL do Webhook contra SSRF (OWASP A10), bloqueando endereços internos, loopback e link-local.
+     */
+    private String resolveSafeWebhookUrl(String requestedUrl) {
+        String candidate = (defaultWebhookUrl != null && !defaultWebhookUrl.isBlank())
+                ? defaultWebhookUrl.trim()
+                : (requestedUrl != null && !requestedUrl.isBlank() ? requestedUrl.trim() : null);
+
+        if (candidate == null || candidate.isBlank()) {
+            return null;
+        }
+
+        try {
+            URI uri = URI.create(candidate);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (scheme == null || host == null || (!"https".equalsIgnoreCase(scheme) && !"http".equalsIgnoreCase(scheme))) {
+                return null;
+            }
+            // Se a URL veio da variável de ambiente configurada no servidor (CUSTOMER_WEBHOOK_URL), permite resolução em rede Docker (Easypanel)
+            if (defaultWebhookUrl != null && !defaultWebhookUrl.isBlank()
+                    && candidate.equalsIgnoreCase(defaultWebhookUrl.trim())) {
+                return uri.toString();
+            }
+            if (!"https".equalsIgnoreCase(scheme)) {
+                return null;
+            }
+            String lowerHost = host.toLowerCase();
+            if ("localhost".equals(lowerHost)
+                    || "127.0.0.1".equals(lowerHost)
+                    || "0.0.0.0".equals(lowerHost)
+                    || "169.254.169.254".equals(lowerHost)
+                    || lowerHost.endsWith(".internal")
+                    || lowerHost.endsWith(".local")) {
+                log.warn("Tentativa de SSRF bloqueada para host não permitido: {}", host);
+                return null;
+            }
+            InetAddress address = InetAddress.getByName(host);
+            if (address.isLoopbackAddress() || address.isLinkLocalAddress() || address.isSiteLocalAddress() || address.isAnyLocalAddress()) {
+                log.warn("Tentativa de SSRF bloqueada para IP privado/interno: {}", address.getHostAddress());
+                return null;
+            }
+            return uri.toString();
+        } catch (Exception e) {
+            log.warn("URL de webhook inválida ou não resolvida ({}): {}", candidate, e.getMessage());
+            return null;
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> parseWebhookJsonToMap(String rawJson) {
         if (rawJson == null || rawJson.isBlank()) {
@@ -233,6 +326,22 @@ public class CustomerLookupService {
             return parsed;
         } catch (Exception e) {
             log.warn("Não foi possível converter resposta JSON do webhook: {}", e.getMessage());
+        }
+        return Collections.emptyMap();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseDirectusFirstItemToMap(String rawJson) {
+        if (rawJson == null || rawJson.isBlank()) {
+            return Collections.emptyMap();
+        }
+        try {
+            Map<String, Object> root = objectMapper.readValue(rawJson, new TypeReference<>() {});
+            Object dataObj = root.get("data");
+            if (dataObj instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Map<?, ?> first) {
+                return (Map<String, Object>) first;
+            }
+        } catch (Exception ignored) {
         }
         return Collections.emptyMap();
     }
@@ -317,47 +426,36 @@ public class CustomerLookupService {
     }
 
     private Optional<Customer> findCustomerByFlexibleKey(String rawKey, String keyType) {
-        List<Customer> all = customerRepository.findAll();
-        String digits = rawKey.replaceAll("\\D", "");
-        String qLower = rawKey.trim().toLowerCase();
+        String cleanPhone = normalizePhone(rawKey);
+        if (!cleanPhone.isEmpty()) {
+            Optional<Customer> directByPhone = customerRepository.findByPhone(cleanPhone);
+            if (directByPhone.isPresent()) return directByPhone;
 
-        if ("CPF".equals(keyType) && !digits.isEmpty()) {
-            Optional<Customer> byCpf = all.stream()
-                    .filter(c -> c.getDocument() != null && c.getDocument().replaceAll("\\D", "").equals(digits))
-                    .findFirst();
-            if (byCpf.isPresent()) return byCpf;
+            String suffix = cleanPhone.length() >= 9 ? cleanPhone.substring(cleanPhone.length() - 9) : cleanPhone;
+            Optional<Customer> bySuffix = customerRepository.findFirstByPhoneEndingWith(suffix);
+            if (bySuffix.isPresent()) return bySuffix;
         }
 
         if ("EMAIL".equals(keyType)) {
-            Optional<Customer> byEmail = all.stream()
-                    .filter(c -> c.getEmail() != null && c.getEmail().equalsIgnoreCase(qLower))
-                    .findFirst();
+            Optional<Customer> byEmail = customerRepository.findFirstByEmailIgnoreCase(rawKey.trim());
             if (byEmail.isPresent()) return byEmail;
         }
 
         if ("PROPOSTA".equals(keyType)) {
-            Optional<Customer> byProp = all.stream()
-                    .filter(c -> (c.getProposal() != null && c.getProposal().equalsIgnoreCase(rawKey.trim()))
-                            || (c.getProtocol() != null && c.getProtocol().equalsIgnoreCase(rawKey.trim())))
-                    .findFirst();
+            String trimmed = rawKey.trim();
+            Optional<Customer> byProp = customerRepository.findFirstByProposalIgnoreCaseOrProtocolIgnoreCase(trimmed, trimmed);
             if (byProp.isPresent()) return byProp;
         }
 
         if ("NOME".equals(keyType)) {
-            Optional<Customer> byName = all.stream()
-                    .filter(c -> c.getName() != null && c.getName().toLowerCase().contains(qLower))
-                    .findFirst();
+            Optional<Customer> byName = customerRepository.findFirstByNameContainingIgnoreCase(rawKey.trim());
             if (byName.isPresent()) return byName;
         }
 
-        String cleanPhone = normalizePhone(rawKey);
-        String suffix = cleanPhone.length() >= 9 ? cleanPhone.substring(cleanPhone.length() - 9) : cleanPhone;
-
-        return all.stream()
+        String digits = rawKey.replaceAll("\\D", "");
+        String qLower = rawKey.trim().toLowerCase();
+        return customerRepository.findAll().stream()
                 .filter(c -> {
-                    if (!suffix.isEmpty() && c.getPhone() != null && c.getPhone().replaceAll("\\D", "").endsWith(suffix)) {
-                        return true;
-                    }
                     if (!digits.isEmpty() && c.getDocument() != null && c.getDocument().replaceAll("\\D", "").equals(digits)) {
                         return true;
                     }
@@ -404,8 +502,8 @@ public class CustomerLookupService {
         if (matched.isEmpty()) {
             List<User> analysts = userRepository.findByRoleOrderByNameAsc(Role.ROLE_ANALISTA);
             if (!analysts.isEmpty()) {
-                int hash = Math.abs(customer.getPhone().hashCode());
-                User analyst = analysts.get(hash % analysts.size());
+                int hash = customer.getPhone().hashCode() & 0x7fffffff;
+                User analyst = analysts.get(Math.floorMod(hash, analysts.size()));
                 CallRecord provisioned = createCallForAnalystAndCustomer(analyst, customer);
                 return List.of(CallRecordResponse.fromEntity(provisioned));
             }
@@ -415,7 +513,7 @@ public class CustomerLookupService {
     }
 
     private CallRecord createCallForAnalystAndCustomer(User analyst, Customer customer) {
-        int hash = Math.abs((customer.getPhone() + ":" + analyst.getEmail()).hashCode());
+        int hash = (customer.getPhone() + ":" + analyst.getEmail()).hashCode() & 0x7fffffff;
         String extCallId = "call_" + (100000 + (hash % 899999));
         Optional<CallRecord> existing = callRecordRepository.findByExternalCallId(extCallId);
         if (existing.isPresent()) {
@@ -429,7 +527,7 @@ public class CustomerLookupService {
                 .customerIdentifier(normalizePhone(customer.getPhone()))
                 .callDate(OffsetDateTime.now().minusMinutes(45))
                 .durationSeconds(195)
-                .audioUrl("http://localhost:8080/api/v1/audio/" + extCallId + ".wav?duration=28")
+                .audioUrl("/api/v1/audio/" + extCallId + ".wav?duration=28")
                 .status(CallStatus.PENDENTE)
                 .channel("telefonia")
                 .campaign("atendimento-monitorado")
@@ -452,7 +550,8 @@ public class CustomerLookupService {
         String rawPhone = pickAnyString(data, List.of("Telefone", "telefone", "Telefone_Portabilidade", "phone", "contato", "celular"), fallbackKey);
         String cleanPhone = normalizePhone(rawPhone);
         if (cleanPhone.isEmpty()) {
-            cleanPhone = "119" + String.format("%08d", Math.abs(fallbackKey.hashCode()) % 100000000);
+            int hash = fallbackKey.hashCode() & 0x7fffffff;
+            cleanPhone = "119" + String.format("%08d", hash % 100000000);
         }
 
         final String lookupPhone = cleanPhone;
@@ -460,25 +559,25 @@ public class CustomerLookupService {
                 .orElseGet(() -> Customer.builder().phone(lookupPhone).build());
 
         customer.setPhone(lookupPhone);
-        customer.setSaleDate(pickAnyString(data, List.of("Data_Venda", "Data_da_Venda", "data_da_venda", "dataDaVenda", "saleDate"), "28/10/2026"));
+        customer.setSaleDate(pickAnyString(data, List.of("Data_Venda", "Data_da_Venda", "data_da_venda", "dataDaVenda", "saleDate"), ""));
         customer.setName(pickAnyString(data, List.of("Nome", "nome", "nome_da_pessoa", "Nome_da_Pessoa", "name", "cliente"),
-                !fallbackPersonName.isBlank() ? fallbackPersonName : "Cliente Externo"));
+                !fallbackPersonName.isBlank() ? fallbackPersonName : ("Contato " + lookupPhone)));
         customer.setDocument(pickAnyString(data, List.of("CPF", "Cpf", "cpf", "document", "documento"),
-                !fallbackCpf.isBlank() ? fallbackCpf : "000.000.000-00"));
-        customer.setBirthDate(pickAnyString(data, List.of("Data_de_nascimento", "Data_Nascimento", "data_de_nascimento", "dataDeNascimento", "birthDate"), "14/05/1985"));
+                !fallbackCpf.isBlank() ? fallbackCpf : ""));
+        customer.setBirthDate(pickAnyString(data, List.of("Data_de_nascimento", "Data_Nascimento", "data_de_nascimento", "dataDeNascimento", "birthDate"), ""));
         customer.setMotherName(pickAnyString(data, List.of("Nome_da_mae", "Nome_da_Mae", "nome_da_mae", "nomeDaMae", "motherName", "mae", "filiacao"),
-                !fallbackMotherName.isBlank() ? fallbackMotherName : "Não informado"));
+                !fallbackMotherName.isBlank() ? fallbackMotherName : ""));
         customer.setFatherName(pickAnyString(data, List.of("Nome_do_pai", "Nome_do_Pai", "nome_do_pai", "nomeDoPai", "fatherName", "pai", "parentName"),
-                !fallbackFatherName.isBlank() ? fallbackFatherName : "Não informado"));
-        customer.setContractedPlan(pickAnyString(data, List.of("Plano_Contratado", "plano_contratado", "planoContratado", "contractedPlan", "plano"), "Plano Padrão"));
-        customer.setProposal(pickAnyString(data, List.of("Proposta", "proposta", "proposal", "protocolo"), "PROP-2026"));
-        customer.setEmail(pickAnyString(data, List.of("Email", "email", "e_mail"), "naotem@gmail.com"));
-        customer.setPaymentMethod(pickAnyString(data, List.of("Forma_de_Pagamento", "forma_de_pagamento", "formaDePagamento", "paymentMethod"), "Boleto Bancário"));
-        customer.setInvoiceType(pickAnyString(data, List.of("Tipo_de_Fatura", "tipo_de_fatura", "tipoDeFatura", "invoiceType"), "Fatura Digital"));
-        customer.setFullAddress(pickAnyString(data, List.of("Endereco_Completo", "endereco_completo", "enderecoCompleto", "fullAddress", "endereco"), "Endereço não informado"));
-        customer.setDueDate(pickAnyString(data, List.of("Vencimento", "vencimento", "dueDate"), "15"));
-        customer.setEarlyPortability(pickAnyString(data, List.of("Portabilidade_Antecipada", "portabilidade_antecipada", "portabilidadeAntecipada", "earlyPortability"), "Sim"));
-        customer.setProtocol(pickAnyString(data, List.of("Proposta", "protocol", "protocolo"), "PROT-EXT-2026"));
+                !fallbackFatherName.isBlank() ? fallbackFatherName : ""));
+        customer.setContractedPlan(pickAnyString(data, List.of("Plano_Contratado", "plano_contratado", "planoContratado", "contractedPlan", "plano"), ""));
+        customer.setProposal(pickAnyString(data, List.of("Proposta", "proposta", "proposal", "protocolo"), ""));
+        customer.setEmail(pickAnyString(data, List.of("Email", "email", "e_mail"), ""));
+        customer.setPaymentMethod(pickAnyString(data, List.of("Forma_de_Pagamento", "forma_de_pagamento", "formaDePagamento", "paymentMethod"), ""));
+        customer.setInvoiceType(pickAnyString(data, List.of("Tipo_de_Fatura", "tipo_de_fatura", "tipoDeFatura", "invoiceType"), ""));
+        customer.setFullAddress(pickAnyString(data, List.of("Endereco_Completo", "endereco_completo", "enderecoCompleto", "fullAddress", "endereco"), ""));
+        customer.setDueDate(pickAnyString(data, List.of("Vencimento", "vencimento", "dueDate"), ""));
+        customer.setEarlyPortability(pickAnyString(data, List.of("Portabilidade_Antecipada", "portabilidade_antecipada", "portabilidadeAntecipada", "earlyPortability"), ""));
+        customer.setProtocol(pickAnyString(data, List.of("Proposta", "protocol", "protocolo"), ""));
 
         return customerRepository.save(customer);
     }
@@ -499,23 +598,11 @@ public class CustomerLookupService {
     }
 
     private Customer ensureWebhookFieldsPopulated(Customer c) {
-        boolean changed = false;
         if (c.getPhone() != null && c.getPhone().startsWith("+55")) {
             c.setPhone(normalizePhone(c.getPhone()));
-            changed = true;
+            return customerRepository.save(c);
         }
-        if (c.getSaleDate() == null) { c.setSaleDate("28/10/2026"); changed = true; }
-        if (c.getBirthDate() == null) { c.setBirthDate("14/05/1985"); changed = true; }
-        if (c.getMotherName() == null) { c.setMotherName("Helena Almeida Prado"); changed = true; }
-        if (c.getFatherName() == null) { c.setFatherName("Carlos Alberto Prado"); changed = true; }
-        if (c.getContractedPlan() == null) { c.setContractedPlan("Fibra Empresarial 600 Mega + Pós 50GB"); changed = true; }
-        if (c.getProposal() == null) { c.setProposal("PROP-2026-" + (Math.abs(c.getPhone().hashCode()) % 89999 + 10000)); changed = true; }
-        if (c.getPaymentMethod() == null) { c.setPaymentMethod("Débito Automático"); changed = true; }
-        if (c.getInvoiceType() == null) { c.setInvoiceType("Fatura Digital (E-mail / WhatsApp)"); changed = true; }
-        if (c.getFullAddress() == null) { c.setFullAddress("Av. Paulista, 1578 - Bela Vista, São Paulo - SP, 01310-200"); changed = true; }
-        if (c.getDueDate() == null) { c.setDueDate("Todo dia 10"); changed = true; }
-        if (c.getEarlyPortability() == null) { c.setEarlyPortability("Sim (Portabilidade Autorizada)"); changed = true; }
-        return changed ? customerRepository.save(c) : c;
+        return c;
     }
 
     private Customer createFallbackCustomerForKey(
@@ -526,7 +613,7 @@ public class CustomerLookupService {
             String paramMotherName,
             String paramFatherName
     ) {
-        int hash = Math.abs(rawKey.hashCode());
+        int hash = rawKey.hashCode() & 0x7fffffff;
         String cleanPhone = "TELEFONE".equals(keyType)
                 ? normalizePhone(rawKey)
                 : ("119" + String.format("%08d", hash % 100000000));
@@ -536,45 +623,30 @@ public class CustomerLookupService {
 
         String cpf = !paramCpf.isBlank()
                 ? paramCpf
-                : ("CPF".equals(keyType)
-                        ? rawKey.trim()
-                        : String.format("%03d.%03d.%03d-%02d",
-                                (hash % 899) + 100,
-                                ((hash / 10) % 899) + 100,
-                                ((hash / 100) % 899) + 100,
-                                hash % 99));
-        String protocol = String.format("CRM-2026-%06d", hash % 999999);
-        String proposal = "PROPOSTA".equals(keyType)
-                ? rawKey.trim().toUpperCase()
-                : String.format("PROP-2026-%05d", hash % 99999);
-        String email = "EMAIL".equals(keyType)
-                ? rawKey.trim().toLowerCase()
-                : ("contato." + (hash % 9999) + "@cliente.com.br");
+                : ("CPF".equals(keyType) ? rawKey.trim() : "");
+        String proposal = "PROPOSTA".equals(keyType) ? rawKey.trim().toUpperCase() : "";
+        String email = "EMAIL".equals(keyType) ? rawKey.trim().toLowerCase() : "";
         String name = !paramPersonName.isBlank()
                 ? paramPersonName
-                : ("NOME".equals(keyType)
-                        ? rawKey.trim()
-                        : ("Carlos Eduardo (" + cleanPhone + ")"));
-        String mother = !paramMotherName.isBlank() ? paramMotherName : "Ana Lúcia Mendes";
-        String father = !paramFatherName.isBlank() ? paramFatherName : "Carlos Alberto Mendes";
+                : ("NOME".equals(keyType) ? rawKey.trim() : ("Contato " + cleanPhone));
 
         return customerRepository.save(Customer.builder()
                 .phone(cleanPhone)
-                .saleDate("30/10/2026")
+                .saleDate("")
                 .name(name)
                 .document(cpf)
-                .birthDate("22/08/1988")
-                .motherName(mother)
-                .fatherName(father)
-                .contractedPlan("Controle Fibra 500 Mega + 40GB Móvel")
+                .birthDate("")
+                .motherName(paramMotherName)
+                .fatherName(paramFatherName)
+                .contractedPlan("")
                 .proposal(proposal)
                 .email(email)
-                .paymentMethod("Boleto / PIX")
-                .invoiceType("Fatura Digital (E-mail)")
-                .fullAddress("Rua da Consolação, 2410 - Jardins, São Paulo - SP")
-                .dueDate("Todo dia 15")
-                .earlyPortability("Sim")
-                .protocol(protocol)
+                .paymentMethod("")
+                .invoiceType("")
+                .fullAddress("")
+                .dueDate("")
+                .earlyPortability("")
+                .protocol(proposal)
                 .build());
     }
 }

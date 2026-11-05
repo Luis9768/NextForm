@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -42,231 +42,280 @@ export default function CallsListPage() {
     enabled: !!user,
   });
 
-  const filteredCalls = calls.filter((call) => {
-    if (!searchTerm.trim()) return true;
+  const filteredCalls = useMemo(() => {
+    if (!searchTerm.trim()) return calls;
     const q = searchTerm.toLowerCase();
-    return (
-      call.externalCallId.toLowerCase().includes(q) ||
-      call.customerIdentifier.toLowerCase().includes(q) ||
-      call.analyst.name.toLowerCase().includes(q) ||
-      call.analyst.email.toLowerCase().includes(q) ||
-      (call.campaign && call.campaign.toLowerCase().includes(q)) ||
-      (call.channel && call.channel.toLowerCase().includes(q))
+    return calls.filter(
+      (call) =>
+        call.externalCallId.toLowerCase().includes(q) ||
+        call.customerIdentifier.toLowerCase().includes(q) ||
+        call.analyst.name.toLowerCase().includes(q) ||
+        call.analyst.email.toLowerCase().includes(q) ||
+        (call.campaign && call.campaign.toLowerCase().includes(q)) ||
+        (call.channel && call.channel.toLowerCase().includes(q))
     );
-  });
+  }, [calls, searchTerm]);
+
+  const metrics = useMemo(() => {
+    const total = calls.length;
+    const pending = calls.filter((c) => c.status === "PENDENTE").length;
+    const evaluated = calls.filter((c) => c.status === "AVALIADA").length;
+    const avgDuration =
+      total > 0
+        ? Math.round(
+            calls.reduce((acc, c) => acc + (c.durationSeconds || 0), 0) / total
+          )
+        : 0;
+    return { total, pending, evaluated, avgDuration };
+  }, [calls]);
 
   return (
     <AppShell>
-      <div className="space-y-6 pb-16">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
-              Central de Ligações Gravadas
-            </h1>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-              Todas as gravações vinculadas aos analistas para escuta e
-              avaliação de qualidade.
-            </p>
+      <div className="space-y-4 pb-14 w-full overflow-x-hidden">
+        {/* Strip de Resumo Executivo */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="px-4 py-3.5 rounded-xl border border-zinc-800/80 bg-[#0e0e11] flex items-baseline justify-between">
+            <span className="text-xs text-zinc-400">Total de Gravações</span>
+            <span className="text-lg font-semibold font-mono text-zinc-100">
+              {metrics.total}
+            </span>
+          </div>
+          <div className="px-4 py-3.5 rounded-xl border border-zinc-800/80 bg-[#0e0e11] flex items-baseline justify-between">
+            <span className="text-xs text-zinc-400">Pendentes</span>
+            <span className="text-lg font-semibold font-mono text-amber-400">
+              {metrics.pending}
+            </span>
+          </div>
+          <div className="px-4 py-3.5 rounded-xl border border-zinc-800/80 bg-[#0e0e11] flex items-baseline justify-between">
+            <span className="text-xs text-zinc-400">Avaliadas</span>
+            <span className="text-lg font-semibold font-mono text-emerald-400">
+              {metrics.evaluated}
+            </span>
+          </div>
+          <div className="px-4 py-3.5 rounded-xl border border-zinc-800/80 bg-[#0e0e11] flex items-baseline justify-between">
+            <span className="text-xs text-zinc-400">Duração Média</span>
+            <span className="text-lg font-semibold font-mono text-zinc-100">
+              {formatDuration(metrics.avgDuration)}
+            </span>
+          </div>
+        </div>
+
+        {/* Barra de Ferramentas Unificada */}
+        <div className="p-3 rounded-xl border border-zinc-800/80 bg-[#0e0e11] flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+            <div className="inline-flex items-center p-0.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+              {(
+                [
+                  { id: "ALL", label: "Todas" },
+                  { id: "PENDENTE", label: "Pendentes" },
+                  { id: "AVALIADA", label: "Avaliadas" },
+                ] as const
+              ).map((tab) => {
+                const active = statusFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setStatusFilter(tab.id)}
+                    className={`h-7 px-2.5 rounded-md text-xs font-medium transition-colors ${
+                      active
+                        ? "bg-zinc-100 text-zinc-950 font-semibold"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="relative w-full sm:w-64">
+              <Search className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Buscar protocolo, telefone ou analista..."
+                className="w-full h-8 pl-8 pr-3 rounded-md border border-zinc-800 bg-[#09090b] text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-600"
+              />
+            </div>
           </div>
 
           {isGestor && (
             <Link
               href="/analysts"
-              className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-950 hover:opacity-90 text-xs font-semibold transition-opacity self-start"
+              className="h-8 px-3.5 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shrink-0"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>Anexar Nova Ligação por Analista</span>
+              <span>Nova Ligação</span>
             </Link>
           )}
         </div>
 
-        {/* Filters & Search Bar (Shadcn Neutral Dark) */}
-        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800/90 bg-white dark:bg-[#101013] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-zinc-100 dark:bg-[#09090b] p-1 border border-zinc-200 dark:border-zinc-800/80 self-start">
-            {(
-              [
-                { id: "ALL", label: "Todas as Ligações" },
-                { id: "PENDENTE", label: "Pendentes de Avaliação" },
-                { id: "AVALIADA", label: "Avaliadas" },
-              ] as const
-            ).map((tab) => {
-              const active = statusFilter === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setStatusFilter(tab.id)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    active
-                      ? "bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-950 font-semibold"
-                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
+        {/* Tabela de Gravações Padronizada em Grid (Alinhamento Vertical Estrito) */}
+        <div className="rounded-xl border border-zinc-800/80 bg-[#0e0e11] divide-y divide-zinc-800/60 overflow-hidden">
+          {/* Cabeçalho de Colunas (Desktop) */}
+          <div className="hidden lg:grid lg:grid-cols-[176px_minmax(0,1.5fr)_minmax(0,1.25fr)_84px_138px_56px_168px] lg:items-center lg:gap-3 px-5 py-2.5 bg-[#09090b] text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+            <span>Código / ID</span>
+            <span>Operador & Setor</span>
+            <span>Telefone & Data</span>
+            <span className="text-right">Duração</span>
+            <span className="text-center">Status</span>
+            <span className="text-right">Nota</span>
+            <span className="text-right">Ações</span>
           </div>
 
-          <div className="relative w-full lg:w-80">
-            <Search className="h-3.5 w-3.5 text-zinc-500 absolute left-3.5 top-3" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar protocolo, telefone ou analista..."
-              className="w-full h-9 pl-9 pr-4 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#09090b] text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-600"
-            />
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800/90 bg-white dark:bg-[#101013] overflow-hidden">
           {isLoading ? (
-            <div className="p-12 text-center text-xs text-zinc-500">
+            <div className="py-12 text-center text-xs text-zinc-500">
               Carregando ligações...
             </div>
           ) : filteredCalls.length === 0 ? (
-            <div className="p-12 text-center space-y-2">
-              <PhoneCall className="h-7 w-7 text-zinc-500 mx-auto" />
-              <p className="text-xs font-medium text-zinc-400">
-                Nenhuma ligação encontrada para o filtro selecionado.
+            <div className="py-12 text-center space-y-2">
+              <PhoneCall className="h-6 w-6 text-zinc-500 mx-auto" />
+              <p className="text-xs text-zinc-400">
+                Nenhuma gravação encontrada.
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[840px] text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-zinc-200 dark:border-zinc-800 text-[11px] font-mono uppercase text-zinc-500 whitespace-nowrap">
-                    <th className="py-3.5 px-6">Ligação / Data</th>
-                    <th className="py-3.5 px-4">Analista</th>
-                    <th className="py-3.5 px-4">Cliente / Campanha</th>
-                    <th className="py-3.5 px-4 text-center">Duração</th>
-                    <th className="py-3.5 px-4 text-center">Status</th>
-                    <th className="py-3.5 px-4 text-center">Nota Final</th>
-                    <th className="py-3.5 px-6 text-right">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/80 text-xs">
-                  {filteredCalls.map((call) => {
-                    const isEvaluated = call.status === "AVALIADA";
-                    const evalBadge = getEvaluationStatusBadge(
-                      call.evaluationStatus
-                    );
-                    const isPlaying = playingCallId === call.id;
+            filteredCalls.map((call) => {
+              const isEvaluated = call.status === "AVALIADA";
+              const evalBadge = getEvaluationStatusBadge(call.evaluationStatus);
+              const isPlaying = playingCallId === call.id;
+              const sectorLabel = call.analyst.department || "Geral";
+              const initials = (call.analyst.name || "OP")
+                .split(" ")
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((w) => w[0]?.toUpperCase())
+                .join("");
 
-                    return (
-                      <React.Fragment key={call.id}>
-                        <tr className="hover:bg-zinc-50/60 dark:hover:bg-zinc-900/40 transition-colors">
-                          <td className="py-4 px-6">
-                            <span className="font-mono font-bold text-zinc-900 dark:text-zinc-100">
-                              #{call.externalCallId}
-                            </span>
-                            <p className="text-[11px] text-zinc-500 mt-0.5">
-                              {formatDateTime(call.callDate)}
-                            </p>
-                          </td>
+              return (
+                <div key={call.id} className="divide-y divide-zinc-800/50">
+                  <div className="p-4 sm:px-5 sm:py-3 hover:bg-zinc-900/35 transition-colors flex flex-col lg:grid lg:grid-cols-[176px_minmax(0,1.5fr)_minmax(0,1.25fr)_84px_138px_56px_168px] lg:items-center gap-3">
+                    {/* Coluna 1: Código / ID com Largura Fixa */}
+                    <div className="min-w-0">
+                      <span
+                        title={`#${call.externalCallId}`}
+                        className="inline-block max-w-full truncate px-2.5 py-1 rounded-md bg-[#141418] border border-zinc-800 font-mono text-[11px] font-semibold text-zinc-200"
+                      >
+                        #{call.externalCallId}
+                      </span>
+                    </div>
 
-                          <td className="py-4 px-4">
-                            <p className="font-semibold text-zinc-900 dark:text-zinc-100">
-                              {call.analyst.name}
-                            </p>
-                            <p className="text-[11px] text-zinc-500">
-                              {call.analyst.email}
-                            </p>
-                          </td>
+                    {/* Coluna 2: Operador (Avatar + Nome + Setor) */}
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="h-8 w-8 rounded-lg bg-[#15151a] border border-zinc-800 flex items-center justify-center text-[11px] font-mono font-semibold text-zinc-200 shrink-0">
+                        {initials}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-zinc-100 truncate">
+                          {call.analyst.name}
+                        </p>
+                        <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded bg-[#141418] border border-zinc-800/90 text-[10px] font-mono text-zinc-400 truncate max-w-full">
+                          {sectorLabel}
+                        </span>
+                      </div>
+                    </div>
 
-                          <td className="py-4 px-4">
-                            <p className="font-mono text-zinc-800 dark:text-zinc-200">
-                              {call.customerIdentifier}
-                            </p>
-                            <p className="text-[11px] text-zinc-500">
-                              {call.channel} • {call.campaign}
-                            </p>
-                          </td>
+                    {/* Coluna 3: Telefone & Data */}
+                    <div className="min-w-0">
+                      <p className="text-xs font-mono font-medium text-zinc-200 truncate">
+                        Tel: {call.customerIdentifier}
+                      </p>
+                      <p className="text-[11px] font-mono text-zinc-500 truncate mt-0.5">
+                        {formatDateTime(call.callDate)}
+                      </p>
+                    </div>
 
-                          <td className="py-4 px-4 text-center font-mono text-zinc-400">
-                            {formatDuration(call.durationSeconds)}
-                          </td>
+                    {/* Coluna 4: Duração */}
+                    <div className="flex items-center justify-between lg:justify-end">
+                      <span className="text-[10px] font-mono uppercase text-zinc-500 lg:hidden">
+                        Duração
+                      </span>
+                      <span className="text-xs font-mono tabular-nums text-zinc-400">
+                        {formatDuration(call.durationSeconds)}
+                      </span>
+                    </div>
 
-                          <td className="py-4 px-4 text-center">
-                            {isEvaluated ? (
-                              <span
-                                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] ${evalBadge.className}`}
-                              >
-                                <CheckCircle2 className="h-3 w-3" />
-                                {evalBadge.label}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium border border-zinc-700 bg-zinc-900 text-zinc-300">
-                                <Clock className="h-3 w-3" />
-                                Pendente
-                              </span>
-                            )}
-                          </td>
+                    {/* Coluna 5: Status Centralizado */}
+                    <div className="flex items-center justify-between lg:justify-center">
+                      <span className="text-[10px] font-mono uppercase text-zinc-500 lg:hidden">
+                        Status
+                      </span>
+                      {isEvaluated ? (
+                        <span
+                          className={`inline-flex items-center justify-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] whitespace-nowrap ${evalBadge.className}`}
+                        >
+                          <CheckCircle2 className="h-3 w-3 shrink-0" />
+                          <span>{evalBadge.label}</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center justify-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium border border-zinc-800 bg-[#141418] text-zinc-300 whitespace-nowrap">
+                          <Clock className="h-3 w-3 text-zinc-400 shrink-0" />
+                          <span>Pendente</span>
+                        </span>
+                      )}
+                    </div>
 
-                          <td className="py-4 px-4 text-center font-mono">
-                            {isEvaluated &&
-                            call.finalScorePercentage !== null &&
-                            call.finalScorePercentage !== undefined ? (
-                              <span className="font-bold text-sm text-zinc-100">
-                                {Number(call.finalScorePercentage).toFixed(1)}%
-                              </span>
-                            ) : (
-                              <span className="text-zinc-500">-</span>
-                            )}
-                          </td>
+                    {/* Coluna 6: Nota Final (Slot fixo mesmo quando Pendente) */}
+                    <div className="flex items-center justify-between lg:justify-end">
+                      <span className="text-[10px] font-mono uppercase text-zinc-500 lg:hidden">
+                        Nota
+                      </span>
+                      <span className="font-mono font-bold text-sm tabular-nums text-zinc-100">
+                        {isEvaluated &&
+                        call.finalScorePercentage !== null &&
+                        call.finalScorePercentage !== undefined
+                          ? `${Number(call.finalScorePercentage).toFixed(0)}%`
+                          : "—"}
+                      </span>
+                    </div>
 
-                          <td className="py-4 px-6 text-right">
-                            <div className="inline-flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setPlayingCallId(isPlaying ? null : call.id)
-                                }
-                                className="h-8 px-3 rounded-lg border border-zinc-300 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 text-xs font-medium text-zinc-700 dark:text-zinc-200 transition-colors"
-                              >
-                                {isPlaying ? "Ocultar Áudio" : "Ouvir"}
-                              </button>
+                    {/* Coluna 7: Botões de Ação */}
+                    <div className="flex items-center justify-end gap-1.5 pt-2 lg:pt-0 border-t lg:border-t-0 border-zinc-800/50">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPlayingCallId(isPlaying ? null : call.id)
+                        }
+                        className="h-8 px-2.5 rounded-md border border-zinc-800 bg-[#141418] hover:bg-zinc-800 text-xs font-medium text-zinc-200 inline-flex items-center gap-1.5 transition-colors"
+                      >
+                        <Headphones className="h-3.5 w-3.5" />
+                        <span>{isPlaying ? "Ocultar" : "Ouvir"}</span>
+                      </button>
 
-                              {isEvaluated && call.evaluationId ? (
-                                <Link
-                                  href={`/evaluations/${call.evaluationId}`}
-                                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-800 text-xs font-medium text-zinc-200 transition-colors"
-                                >
-                                  <Eye className="h-3.5 w-3.5" />
-                                  <span>Ver Avaliação</span>
-                                </Link>
-                              ) : isGestor ? (
-                                <Link
-                                  href={`/calls/${call.id}/evaluate`}
-                                  className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-950 hover:opacity-90 text-xs font-semibold transition-opacity"
-                                >
-                                  <Headphones className="h-3.5 w-3.5" />
-                                  <span>Avaliar</span>
-                                </Link>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                        {isPlaying && (
-                          <tr className="bg-zinc-950/60">
-                            <td colSpan={7} className="p-4">
-                              <CallAudioPlayer
-                                audioUrl={call.audioUrl}
-                                externalCallId={call.externalCallId}
-                                durationSeconds={call.durationSeconds}
-                              />
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                      {isEvaluated && call.evaluationId ? (
+                        <Link
+                          href={`/evaluations/${call.evaluationId}`}
+                          className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition-colors"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>Espelho</span>
+                        </Link>
+                      ) : isGestor ? (
+                        <Link
+                          href={`/calls/${call.id}/evaluate`}
+                          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition-colors"
+                        >
+                          <Headphones className="h-3.5 w-3.5" />
+                          <span>Avaliar</span>
+                        </Link>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {isPlaying && (
+                    <div className="p-4 bg-[#09090b]">
+                      <CallAudioPlayer
+                        audioUrl={call.audioUrl}
+                        externalCallId={call.externalCallId}
+                        durationSeconds={call.durationSeconds}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       </div>

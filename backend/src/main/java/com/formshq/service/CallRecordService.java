@@ -12,6 +12,7 @@ import com.formshq.exception.ResourceNotFoundException;
 import com.formshq.repository.CallRecordRepository;
 import com.formshq.repository.CustomerRepository;
 import com.formshq.repository.UserRepository;
+import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +31,7 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Slf4j
@@ -41,6 +43,8 @@ public class CallRecordService {
     private final CustomerRepository customerRepository;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final SectorScopePolicy sectorScopePolicy;
+    private final R2ObjectStorageService r2ObjectStorageService;
 
     @Transactional
     public CallRecordResponse ingestFromN8n(N8nCallWebhookRequest request) {
@@ -111,7 +115,8 @@ public class CallRecordService {
             customer = customerRepository.save(customer);
         }
 
-        String extCallId = "call_" + (100000 + Math.abs(UUID.randomUUID().hashCode() % 899999));
+        int hash = UUID.randomUUID().hashCode() & 0x7fffffff;
+        String extCallId = "call_" + (100000 + (hash % 899999));
         int duration = (durationSeconds != null && durationSeconds > 0) ? durationSeconds : 180;
         String resolvedAudioUrl;
 
@@ -124,16 +129,23 @@ public class CallRecordService {
                         ? audioFile.getOriginalFilename().replaceAll("[^a-zA-Z0-9._-]", "_")
                         : "recording.mp3";
                 String storedFileName = extCallId + "_" + originalName;
-                Path targetPath = uploadDir.resolve(storedFileName);
-                Files.copy(audioFile.getInputStream(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+                byte[] fileBytes = audioFile.getBytes();
 
-                resolvedAudioUrl = "http://localhost:8080/api/v1/audio/files/" + storedFileName;
+                // 1. Envia para o Cloudflare R2 (quando configurado no ambiente / Easypanel)
+                String contentType = audioFile.getContentType() != null ? audioFile.getContentType() : "audio/mpeg";
+                r2ObjectStorageService.uploadAudioObject(storedFileName, fileBytes, contentType);
+
+                // 2. Mantém cache local para streaming rápido por chunks (SeekableByteChannel)
+                Path targetPath = uploadDir.resolve(storedFileName);
+                Files.write(targetPath, fileBytes);
+
+                resolvedAudioUrl = r2ObjectStorageService.resolveStoredAudioUrl(storedFileName);
             } catch (IOException e) {
                 log.error("Falha ao salvar arquivo de áudio anexado", e);
                 throw new RuntimeException("Não foi possível armazenar o arquivo de áudio enviado.");
             }
         } else {
-            resolvedAudioUrl = "http://localhost:8080/api/v1/audio/" + extCallId + ".wav?duration=" + Math.min(duration, 40);
+            resolvedAudioUrl = "/api/v1/audio/" + extCallId + ".wav?duration=" + Math.min(duration, 40);
         }
 
         String resolvedCampaign = (campaign != null && !campaign.isBlank()) ? campaign.trim() : "auditoria-manual";
@@ -183,6 +195,18 @@ public class CallRecordService {
             } else {
                 records = callRecordRepository.findAllByOrderByCallDateDesc();
             }
+
+            if (!currentUser.isAdmin() && currentUser.isGestor()) {
+                Set<String> allowed = sectorScopePolicy.resolveAllowedSectorsForCaller(currentUser);
+                if (!allowed.isEmpty()) {
+                    records = records.stream()
+                            .filter(c -> {
+                                String analystDept = c.getAnalyst() != null ? c.getAnalyst().getDepartment() : null;
+                                return sectorScopePolicy.isSectorAllowed(allowed, analystDept);
+                            })
+                            .toList();
+                }
+            }
         }
 
         return records.stream()
@@ -198,12 +222,14 @@ public class CallRecordService {
         if (currentUser.isAnalista() && !callRecord.getAnalyst().getId().equals(currentUser.getId())) {
             throw new AccessDeniedException("Analistas só podem visualizar suas próprias ligações.");
         }
+        String analystDept = callRecord.getAnalyst() != null ? callRecord.getAnalyst().getDepartment() : null;
+        sectorScopePolicy.assertCallerCanAccessSector(currentUser, analystDept);
 
         return CallRecordResponse.fromEntity(callRecord);
     }
 
     private Customer provisionCustomerFromWebhook(String phone) {
-        int hash = Math.abs(phone.hashCode());
+        int hash = phone.hashCode() & 0x7fffffff;
         String cpf = String.format("%03d.%03d.%03d-%02d",
                 (hash % 899) + 100,
                 ((hash / 10) % 899) + 100,

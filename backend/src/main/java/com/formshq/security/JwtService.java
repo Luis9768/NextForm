@@ -66,6 +66,9 @@ public class JwtService {
     }
 
     public boolean isTokenValid(String token, UserDetails userDetails) {
+        if (!userDetails.isEnabled() || !userDetails.isAccountNonLocked()) {
+            return false;
+        }
         final String username = extractUsername(token);
         return username.equalsIgnoreCase(userDetails.getUsername()) && !isTokenExpired(token);
     }

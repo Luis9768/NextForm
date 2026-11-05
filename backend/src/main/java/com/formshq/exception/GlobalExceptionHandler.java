@@ -3,13 +3,17 @@ package com.formshq.exception;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.DisabledException;
+import org.springframework.security.authentication.LockedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
@@ -18,6 +22,11 @@ import java.util.Map;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleClientDisconnect(AsyncRequestNotUsableException ex, HttpServletRequest request) {
+        log.debug("Conexão encerrada pelo cliente durante streaming em {}: {}", request.getRequestURI(), ex.getMessage());
+    }
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleNotFound(ResourceNotFoundException ex, HttpServletRequest request) {
@@ -39,9 +48,17 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.UNAUTHORIZED, "Credenciais inválidas. Verifique seu e-mail e senha.", request, null);
     }
 
+    @ExceptionHandler({DisabledException.class, LockedException.class})
+    public ResponseEntity<ApiErrorResponse> handleDisabledOrLocked(Exception ex, HttpServletRequest request) {
+        return buildResponse(HttpStatus.FORBIDDEN, "Esta conta de usuário encontra-se inativa ou bloqueada.", request, null);
+    }
+
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiErrorResponse> handleAccessDenied(AccessDeniedException ex, HttpServletRequest request) {
-        return buildResponse(HttpStatus.FORBIDDEN, "Acesso negado: seu perfil não possui permissão para esta operação.", request, null);
+        String msg = (ex.getMessage() != null && !ex.getMessage().isBlank() && !"Access Denied".equalsIgnoreCase(ex.getMessage()))
+                ? ex.getMessage()
+                : "Acesso negado: seu perfil não possui permissão para esta operação.";
+        return buildResponse(HttpStatus.FORBIDDEN, msg, request, null);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -73,6 +90,8 @@ public class GlobalExceptionHandler {
                 OffsetDateTime.now(),
                 validationErrors
         );
-        return ResponseEntity.status(status).body(body);
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body);
     }
 }

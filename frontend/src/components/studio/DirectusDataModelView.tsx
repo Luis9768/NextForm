@@ -325,13 +325,7 @@ export function DirectusDataModelView({
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-400 whitespace-nowrap shrink-0">
                         {col.fields.length} campos
                       </span>
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-400 whitespace-nowrap shrink-0">
-                        {col.itemCount} itens
-                      </span>
                     </div>
-                    <p className="text-[11px] text-zinc-500 truncate mt-0.5">
-                      {col.description}
-                    </p>
                   </div>
                 </div>
 

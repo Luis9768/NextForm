@@ -13,6 +13,7 @@ interface AuthContextValue {
   isGestor: boolean;
   isAnalista: boolean;
   login: (email: string, password: string) => Promise<void>;
+  updateCurrentUser: (updated: UserSummary) => void;
   logout: () => void;
 }
 
@@ -45,6 +46,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isLoading) {
       if (!user && pathname !== "/login") {
         router.replace("/login");
+      } else if (user && user.mustChangePassword && pathname !== "/first-access") {
+        router.replace("/first-access");
       }
     }
   }, [isLoading, user, pathname, router]);
@@ -55,7 +58,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("formshq_user", JSON.stringify(response.user));
     setToken(response.accessToken);
     setUser(response.user);
-    router.push("/dashboard");
+
+    if (response.user.mustChangePassword) {
+      router.push("/first-access");
+    } else if (response.user.role === "ROLE_ANALISTA") {
+      router.push("/my-evaluations");
+    } else {
+      router.push("/dashboard");
+    }
+  };
+
+  const updateCurrentUser = (updated: UserSummary) => {
+    localStorage.setItem("formshq_user", JSON.stringify(updated));
+    setUser(updated);
   };
 
   const logout = () => {
@@ -80,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isGestor,
         isAnalista,
         login,
+        updateCurrentUser,
         logout,
       }}
     >

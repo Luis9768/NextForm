@@ -16,10 +16,14 @@ import com.formshq.repository.EvaluationFormTemplateRepository;
 import com.formshq.repository.SectorRepository;
 import com.formshq.repository.UserRepository;
 import com.formshq.security.UserPrincipal;
+import com.formshq.service.DirectusEvaluationSyncService;
 import com.formshq.service.EvaluationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,13 +45,54 @@ public class DataSeeder implements CommandLineRunner {
     private final EvaluationFormTemplateRepository formTemplateRepository;
     private final CallRecordRepository callRecordRepository;
     private final EvaluationService evaluationService;
+    private final DirectusEvaluationSyncService directusEvaluationSyncService;
     private final PasswordEncoder passwordEncoder;
+    private final Environment environment;
+
+    @Value("${app.security.bootstrap-admin.name:Super Admin NextForm}")
+    private String bootstrapAdminName;
+
+    @Value("${app.security.bootstrap-admin.email:}")
+    private String bootstrapAdminEmail;
+
+    @Value("${app.security.bootstrap-admin.password:}")
+    private String bootstrapAdminPassword;
+
+    @Value("${app.integrations.directus.initial-eval-limit:${DIRECTUS_INITIAL_EVAL_LIMIT:50}}")
+    private int directusInitialEvalLimit;
 
     @Override
     @Transactional
     public void run(String... args) {
-        ensureBaseSectorsAndAdmin();
+        boolean isTestProfile = environment.acceptsProfiles(Profiles.of("test"));
+
+        ensureBaseSectorsAndAdmin(isTestProfile);
         ensurePortabilidadeFormTemplate();
+        ensureSacFormTemplate();
+        ensureRetencaoFormTemplate();
+
+        if (!isTestProfile) {
+            try {
+                var userResult = directusEvaluationSyncService.syncUsersAndPurgeFictionalData(null, null);
+                log.info("Sincronização inicial de Usuários Directus concluída: {} usuários reais ativos, {} fictícios removidos.",
+                        userResult.syncedUsersCount(), userResult.purgedFictionalUsers());
+            } catch (Exception e) {
+                log.warn("Aviso ao sincronizar usuários do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
+            }
+
+            try {
+                var evalResult = directusEvaluationSyncService.pullFromDirectusApi(
+                        new com.formshq.dto.directus.DirectusPullRequest(null, null, "ALL", directusInitialEvalLimit)
+                );
+                log.info("Sincronização inicial de Avaliações Directus concluída: {} avaliações importadas, {} duplicadas ignoradas.",
+                        evalResult.importedCount(), evalResult.skippedDuplicates());
+            } catch (Exception e) {
+                log.warn("Aviso ao sincronizar avaliações do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
+            }
+
+            ensureBootstrapEnvAdmin();
+            return;
+        }
 
         if (userRepository.count() > 1) {
             return;
@@ -430,8 +475,8 @@ public class DataSeeder implements CommandLineRunner {
         log.info("Carga inicial concluída com sucesso! 5 usuários, 5 setores, 4 clientes, 2 formulários, 6 ligações e 3 avaliações criadas.");
     }
 
-    private void ensureBaseSectorsAndAdmin() {
-        if (!userRepository.existsByEmailIgnoreCase("admin@empresa.com")) {
+    private void ensureBaseSectorsAndAdmin(boolean isTestProfile) {
+        if (isTestProfile && !userRepository.existsByEmailIgnoreCase("admin@empresa.com")) {
             userRepository.save(User.builder()
                     .name("Ricardo Almeida (Diretor Admin)")
                     .email("admin@empresa.com")
@@ -441,15 +486,23 @@ public class DataSeeder implements CommandLineRunner {
                     .allowedSectors("SAC,Cobrança & Retenção,Suporte N1,Retenção & Ouvidoria,Aquisição")
                     .active(true)
                     .build());
+        } else if (!isTestProfile) {
+            ensureBootstrapEnvAdmin();
         }
 
-        List<String[]> defaultSectors = List.of(
-                new String[]{"SAC", "SAC", "Atendimento receptivo ao cliente, dúvidas gerais e solicitações de primeira linha."},
-                new String[]{"Cobrança & Retenção", "COBRANCA_RETENCAO", "Negociação ativa e receptiva de débitos, acordos financeiros e retenção de contratos."},
-                new String[]{"Suporte N1", "SUPORTE_N1", "Triagem técnica de primeiro nível, diagnóstico de incidentes e abertura de chamados."},
-                new String[]{"Retenção & Ouvidoria", "RETENCAO_OUVIDORIA", "Tratativa de casos críticos, reversão de cancelamento (churn) e ouvidoria executiva."},
-                new String[]{"Aquisição", "AQUISICAO", "Prospecção ativa, qualificação de leads e fechamento de novos contratos comerciais."}
-        );
+        List<String[]> defaultSectors = isTestProfile
+                ? List.of(
+                        new String[]{"SAC", "SAC", "Atendimento receptivo ao cliente, dúvidas gerais e solicitações de primeira linha."},
+                        new String[]{"Cobrança & Retenção", "COBRANCA_RETENCAO", "Negociação ativa e receptiva de débitos, acordos financeiros e retenção de contratos."},
+                        new String[]{"Suporte N1", "SUPORTE_N1", "Triagem técnica de primeiro nível, diagnóstico de incidentes e abertura de chamados."},
+                        new String[]{"Retenção & Ouvidoria", "RETENCAO_OUVIDORIA", "Tratativa de casos críticos, reversão de cancelamento (churn) e ouvidoria executiva."},
+                        new String[]{"Aquisição", "AQUISICAO", "Prospecção ativa, qualificação de leads e fechamento de novos contratos comerciais."}
+                )
+                : List.of(
+                        new String[]{"SAC", "SAC", "Atendimento receptivo ao cliente, dúvidas gerais e solicitações de primeira linha."},
+                        new String[]{"Cobrança & Retenção", "COBRANCA_RETENCAO", "Negociação ativa e receptiva de débitos, acordos financeiros e retenção de contratos."},
+                        new String[]{"Aquisição", "AQUISICAO", "Prospecção ativa, portabilidade TIM e fechamento de novos contratos comerciais."}
+                );
 
         for (String[] sec : defaultSectors) {
             if (!sectorRepository.existsByNameIgnoreCase(sec[0])) {
@@ -461,18 +514,338 @@ public class DataSeeder implements CommandLineRunner {
                         .build());
             }
         }
+    }
 
-        userRepository.findByEmailIgnoreCase("gestor@empresa.com").ifPresent(gestor -> {
-            if (gestor.getAllowedSectors() == null || !gestor.getAllowedSectors().contains("Aquisição")) {
-                String current = gestor.getAllowedSectors() != null ? gestor.getAllowedSectors() : "";
-                gestor.setAllowedSectors(current.isBlank() ? "Aquisição" : current + ",Aquisição");
-                userRepository.save(gestor);
-            }
-        });
+    private void ensureBootstrapEnvAdmin() {
+        if (bootstrapAdminEmail == null || bootstrapAdminEmail.isBlank()
+                || bootstrapAdminPassword == null || bootstrapAdminPassword.isBlank()) {
+            return;
+        }
+        String cleanEmail = bootstrapAdminEmail.trim().toLowerCase();
+        String cleanName = (bootstrapAdminName != null && !bootstrapAdminName.isBlank())
+                ? bootstrapAdminName.trim()
+                : "Super Admin NextForm";
+
+        userRepository.findByEmailIgnoreCase(cleanEmail)
+                .map(existing -> {
+                    existing.setName(cleanName);
+                    existing.setRole(Role.ROLE_ADMIN);
+                    existing.setDepartment("Diretoria & Governança");
+                    existing.setAllowedSectors("SAC,Cobrança & Retenção,Aquisição");
+                    existing.setPasswordHash(passwordEncoder.encode(bootstrapAdminPassword.trim()));
+                    existing.setActive(true);
+                    existing.setMustChangePassword(false);
+                    existing.setPasswordChangedAt(OffsetDateTime.now());
+                    return userRepository.save(existing);
+                })
+                .orElseGet(() -> userRepository.save(User.builder()
+                        .name(cleanName)
+                        .email(cleanEmail)
+                        .passwordHash(passwordEncoder.encode(bootstrapAdminPassword.trim()))
+                        .role(Role.ROLE_ADMIN)
+                        .department("Diretoria & Governança")
+                        .allowedSectors("SAC,Cobrança & Retenção,Aquisição")
+                        .active(true)
+                        .mustChangePassword(false)
+                        .passwordChangedAt(OffsetDateTime.now())
+                        .build()));
     }
 
     private void ensurePortabilidadeFormTemplate() {
         String formName = "Monitoria TIM Aquisição - Portabilidade";
+        EvaluationFormTemplate existingForm = formTemplateRepository.findAll().stream()
+                .filter(f -> f.getName().equalsIgnoreCase(formName))
+                .findFirst()
+                .orElse(null);
+
+        if (existingForm != null) {
+            EvaluationFormTemplate hydrated = formTemplateRepository.findWithItemsById(existingForm.getId()).orElse(existingForm);
+            if (hydrated.getItems() != null && hydrated.getItems().size() >= 30) {
+                return;
+            }
+        }
+
+        User creator = userRepository.findByEmailIgnoreCase("gestor@empresa.com")
+                .or(() -> userRepository.findByEmailIgnoreCase("admin@empresa.com"))
+                .orElse(null);
+
+        EvaluationFormTemplate formPortabilidade = existingForm != null
+                ? existingForm
+                : EvaluationFormTemplate.builder()
+                        .name(formName)
+                        .description("Formulário oficial de Monitoria TIM Aquisição (Portabilidade - 100 pontos) espelhado com os 31 critérios oficiais do Directus + controle de Falta Grave.")
+                        .sector("Aquisição")
+                        .passingScorePercentage(new BigDecimal("80.00"))
+                        .version(1)
+                        .active(true)
+                        .createdBy(creator)
+                        .build();
+
+        formPortabilidade.clearAndSetItems(List.of(
+                EvaluationFormItem.builder()
+                        .label("valores_plano • Verbalização correta dos valores do plano (R$ 32,99 / valor mensal)")
+                        .description("Informar exatamente o valor mensal do plano contratado.")
+                        .category("1. Oferta & Plano")
+                        .fatalError(false)
+                        .points(4)
+                        .displayOrder(1)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("fidelidade_e_formas_de_pagamento • Fidelidade contratual (12 meses) e Formas de Pagamento")
+                        .description("Informar a fidelidade de 12 meses, vencimento e forma de pagamento.")
+                        .category("1. Oferta & Plano")
+                        .fatalError(false)
+                        .points(7)
+                        .displayOrder(2)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("portabilidade • Procedimento completo de Portabilidade e prazos (3 a 5 dias úteis)")
+                        .description("Conduzir corretamente o procedimento de portabilidade e informar o prazo de conclusão.")
+                        .category("2. Portabilidade & Chip")
+                        .fatalError(false)
+                        .points(15)
+                        .displayOrder(3)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("envio_do_chip • Informação sobre envio gratuito do chip e número provisório")
+                        .description("Explicar o envio do chip físico/eSIM e o funcionamento do número provisório.")
+                        .category("2. Portabilidade & Chip")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(4)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("mapa_de_cobertura • Consulta e informação do Mapa de Cobertura da TIM")
+                        .description("Consultar e mencionar o mapa de cobertura da TIM na região do cliente.")
+                        .category("2. Portabilidade & Chip")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(5)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Apresentacao_e_finalizacao • Apresentação inicial com nome e finalização formal em nome da TIM")
+                        .description("Apresentar-se com nome e operadora TIM no início e realizar encerramento formal.")
+                        .category("3. Abertura & Encerramento")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(6)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Ligacoes_ilimitadas • Franquia correta de minutos (550 minutos / regras de ligação)")
+                        .description("Verbalizar a franquia correta de 550 minutos do plano sem prometer minutagem divergente.")
+                        .category("1. Oferta & Plano")
+                        .fatalError(false)
+                        .points(3)
+                        .displayOrder(7)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Quantidade_de_gigas • Verbalização exata da franquia de internet (GB do plano + bônus)")
+                        .description("Informar corretamente a quantidade de GB do plano contratado.")
+                        .category("1. Oferta & Plano")
+                        .fatalError(false)
+                        .points(3)
+                        .displayOrder(8)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("fatura_online • Oferta e parametrização de Fatura Online / Digital")
+                        .description("Oferecer e parametrizar adequadamente o recebimento de fatura digital/online.")
+                        .category("1. Oferta & Plano")
+                        .fatalError(false)
+                        .points(3)
+                        .displayOrder(9)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Whatsapp_ilimitado • Explicação correta do WhatsApp ilimitado (exceto chamadas de voz e vídeo)")
+                        .description("Esclarecer que o WhatsApp ilimitado não inclui chamadas de voz e vídeo.")
+                        .category("4. Benefícios & Apps Inclusos")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(10)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("SMS_e_roaming • Informação de SMS ilimitado e Roaming Nacional")
+                        .description("Mencionar SMS ilimitado e cobertura de Roaming Nacional.")
+                        .category("4. Benefícios & Apps Inclusos")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(11)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Tim_by_Deezer_Audiobooks_by_Ubook • Benefício Audiobooks by Ubook / Apps de Conteúdo")
+                        .description("Mencionar corretamente os aplicativos de conteúdo inclusos no plano.")
+                        .category("4. Benefícios & Apps Inclusos")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(12)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Tim_Banca • Benefício TIM Banca Virtual / Jornais")
+                        .description("Informar corretamente o serviço TIM Banca / Banca Jornais.")
+                        .category("4. Benefícios & Apps Inclusos")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(13)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Telegram_Messenger • Benefício Telegram / Messenger incluso")
+                        .description("Mencionar o benefício do Messenger/Telegram incluso na oferta.")
+                        .category("4. Benefícios & Apps Inclusos")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(14)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Facebook_Instagram_e_Twitter • Redes Sociais (Facebook, Instagram e X/Twitter)")
+                        .description("Informar corretamente as regras de uso de redes sociais do plano.")
+                        .category("4. Benefícios & Apps Inclusos")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(15)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Comprovacao • Comprovação de titularidade da linha a ser portada")
+                        .description("Confirmar que o número portado está registrado no CPF do titular.")
+                        .category("5. Confirmação Cadastral & Auditoria")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(16)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Verifica_correios • Verificação de viabilidade de entrega pelos Correios no endereço")
+                        .description("Confirmar com o cliente se os Correios entregam normalmente na residência.")
+                        .category("5. Confirmação Cadastral & Auditoria")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(17)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Auditoria • Leitura completa da Auditoria com aceite explícito do cliente")
+                        .description("Realizar a leitura completa dos termos da venda e obter o aceite claro do titular.")
+                        .category("5. Confirmação Cadastral & Auditoria")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(18)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Pesquisa • Direcionamento para Pesquisa de Satisfação ao final (sem indução)")
+                        .description("Informar sobre o envio da pesquisa de satisfação sem induzir nota.")
+                        .category("3. Abertura & Encerramento")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(19)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("TIM_seguranca • Benefício EXA Segurança Light / TIM Segurança")
+                        .description("Mencionar o benefício EXA Segurança Light incluso no plano.")
+                        .category("4. Benefícios & Apps Inclusos")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(20)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Volume_de_Voz • Volume de voz adequado e audível durante toda a chamada")
+                        .description("Manter tom e volume de voz claros durante todo o contato.")
+                        .category("6. Postura, Linguagem & Comunicação")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(21)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Cordial_com_Cliente • Postura cordial, educada e prestativa com o cliente")
+                        .description("Atender com simpatia, paciência e cortesia.")
+                        .category("6. Postura, Linguagem & Comunicação")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(22)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Nao_interromper • Escuta ativa sem interromper o cliente")
+                        .description("Aguardar o cliente concluir sua fala sem interrupções.")
+                        .category("6. Postura, Linguagem & Comunicação")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(23)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Confirmacao_Positiva • Confirmação positiva dos dados pessoais (Nome, CPF, Nascimento e Mãe)")
+                        .description("Confirmar todos os dados cadastrais do titular sem divergências.")
+                        .category("5. Confirmação Cadastral & Auditoria")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(24)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Endereco_completo • Confirmação de Endereço Completo com CEP, Número e Ponto de Referência")
+                        .description("Validar logradouro, número, bairro, cidade/UF, CEP e ponto de referência.")
+                        .category("5. Confirmação Cadastral & Auditoria")
+                        .fatalError(false)
+                        .points(3)
+                        .displayOrder(25)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Transmite_Seguranca • Transmite segurança, clareza e domínio do produto")
+                        .description("Responder dúvidas com firmeza e clareza técnica.")
+                        .category("6. Postura, Linguagem & Comunicação")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(26)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Solicita_um_momento • Solicita momento de espera com cortesia e retoma adequadamente")
+                        .description("Pedir licença de forma cordial antes de colocar em espera.")
+                        .category("6. Postura, Linguagem & Comunicação")
+                        .fatalError(false)
+                        .points(1)
+                        .displayOrder(27)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Nao_Gagueja • Fluência verbal (sem hesitações ou gagueira excessiva)")
+                        .description("Comunicação fluida e segura ao longo da explicação.")
+                        .category("6. Postura, Linguagem & Comunicação")
+                        .fatalError(false)
+                        .points(2)
+                        .displayOrder(28)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Liguagem • Linguagem formal sem gerundismo, diminutivos ou muletas de fala")
+                        .description("Ausência de gerundismo ('vai estar fazendo'), diminutivos ('minutinho') e repetições excessivas ('tá bom', 'né').")
+                        .category("6. Postura, Linguagem & Comunicação")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(29)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Faz_questionamentos_direcionados • Sondagem e questionamentos direcionados ao perfil do cliente")
+                        .description("Realizar perguntas direcionadas sobre operadora atual, gasto mensal e preferência de chip/eSIM.")
+                        .category("1. Oferta & Plano")
+                        .fatalError(false)
+                        .points(3)
+                        .displayOrder(30)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Se_for_portabilidade • Orientação de SMS de confirmação da Portabilidade (7678 / 24h)")
+                        .description("Explicar claramente a resposta ao SMS de confirmação da portabilidade com o chip atual.")
+                        .category("2. Portabilidade & Chip")
+                        .fatalError(false)
+                        .points(8)
+                        .displayOrder(31)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Falta_Grave • Falta Grave Eliminatória (Tabulação divergente, fraude ou ausência de aceite)")
+                        .description("Divergência grave entre os dados da gravação e a ficha de venda ou ausência de aceite do titular.")
+                        .category("Falta Grave")
+                        .fatalError(true)
+                        .points(0)
+                        .displayOrder(32)
+                        .build()
+        ));
+
+        formTemplateRepository.save(formPortabilidade);
+        log.info("Formulário '{}' (100 pts • 32 itens Directus) cadastrado/atualizado com sucesso!", formName);
+    }
+
+    private void ensureSacFormTemplate() {
+        String formName = "Monitoria SAC";
         boolean exists = formTemplateRepository.findAll().stream()
                 .anyMatch(f -> f.getName().equalsIgnoreCase(formName));
         if (exists) {
@@ -483,148 +856,249 @@ public class DataSeeder implements CommandLineRunner {
                 .or(() -> userRepository.findByEmailIgnoreCase("admin@empresa.com"))
                 .orElse(null);
 
-        EvaluationFormTemplate formPortabilidade = EvaluationFormTemplate.builder()
+        EvaluationFormTemplate formSac = EvaluationFormTemplate.builder()
                 .name(formName)
-                .description("Formulário oficial de Monitoria TIM Aquisição (Portabilidade) com validação dos 13 dados da venda, oferta eSIM (*#06#), franquia 550 min, SMS 7678, auditoria e controle de Falta Grave.")
-                .sector("Aquisição")
+                .description("Formulário oficial de Monitoria SAC (100 pontos) com avaliação de Confirmação de Dados, Procedimentos, Orientação ao Cliente, Protocolo, Oferta de Desconto, Sondagem, Prazos, Descrição e Tabulação, Apresentação, Segurança, Linguagem e Escuta Ativa.")
+                .sector("SAC")
                 .passingScorePercentage(new BigDecimal("80.00"))
                 .version(1)
                 .active(true)
                 .createdBy(creator)
                 .build();
 
-        formPortabilidade.clearAndSetItems(List.of(
+        formSac.clearAndSetItems(List.of(
                 EvaluationFormItem.builder()
-                        .label("Apresentação inicial com nome do operador e identificação da TIM com cordialidade")
-                        .description("O operador deve informar o próprio nome na apresentação inicial e manter postura cordial.")
-                        .category("1. Abertura & Abordagem")
+                        .label("Confirmacao_de_Dados • Confirmação de CPF, E-mail e Telefone Secundário")
+                        .description("Solicitar a confirmação do CPF, do e-mail e questionar se o cliente deseja incluir outro telefone no cadastro.")
+                        .category("1. Confirmação & Procedimentos")
                         .fatalError(false)
-                        .points(5)
+                        .points(10)
                         .displayOrder(1)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Oferta obrigatória de escolha entre Chip Físico e Chip Virtual (eSIM) + Teste *#06# e Wi-Fi")
-                        .description("Perguntar obrigatoriamente a preferência entre chip físico ou eSIM, orientando teste *#06# e necessidade de Wi-Fi quando eSIM.")
-                        .category("2. Oferta de Chip / eSIM")
+                        .label("Realizou_todos_procedimentos_corretamente • Execução Correta dos Procedimentos")
+                        .description("Analisar comprovantes/boletos adequadamente, verificar chamados já em tratativa antes de abrir novo ticket e direcionar corretamente.")
+                        .category("1. Confirmação & Procedimentos")
                         .fatalError(false)
-                        .points(5)
+                        .points(15)
                         .displayOrder(2)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Consulta ao Mapa de Cobertura e verificação de viabilidade de entrega pelos Correios")
-                        .description("Consultar o mapa de cobertura no CEP do cliente e confirmar viabilidade de entrega.")
-                        .category("3. Cobertura & Entrega")
+                        .label("Orientou_o_cliente • Orientação Clara e Canais Digitais / Site")
+                        .description("Orientar corretamente sobre acompanhamento pelo site/canais digitais da administradora, coparticipação, carência, carteirinha e benefícios.")
+                        .category("2. Orientação & Protocolo")
                         .fatalError(false)
-                        .points(5)
+                        .points(10)
                         .displayOrder(3)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Verbalização correta do Plano Contratado, Valor Mensal e Franquia de Internet (GB)")
-                        .description("Informar exatamente o plano contratado (ex: TIM Controle A Plus R$ 32,99 / Controle Smart) sem prometer franquia de GB divergente.")
-                        .category("4. Oferta & Benefícios do Plano")
+                        .label("Informou_n_de_protocolo_no_inicio_da_ligacao • Informe do Protocolo no Início da Ligação")
+                        .description("Informar o número de protocolo logo no início do atendimento.")
+                        .category("2. Orientação & Protocolo")
                         .fatalError(false)
                         .points(10)
                         .displayOrder(4)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Verbalização correta da Franquia de Minutos (550 minutos)")
-                        .description("Informar a franquia correta de 550 minutos do plano (não afirmar ligações ilimitadas ou minutagem incorreta como 50/150/500 min).")
-                        .category("4. Oferta & Benefícios do Plano")
+                        .label("Oferta_de_Desconto • Oferta de Desconto e Alternativas de Pagamento")
+                        .description("Explorar ofertas de desconto ou alternativas financeiras (como pagamento via cartão/boleto) agregando valor ao atendimento.")
+                        .category("3. Sondagem, Oferta & Prazos")
                         .fatalError(false)
-                        .points(5)
+                        .points(10)
                         .displayOrder(5)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Explicação correta de WhatsApp (exceto chamadas de voz e vídeo), Messenger, SMS Ilimitado e Roaming Nacional")
-                        .description("Informar que o WhatsApp ilimitado não inclui chamadas de voz e vídeo, além de mencionar Messenger, SMS ilimitado e Roaming Nacional.")
-                        .category("4. Oferta & Benefícios do Plano")
+                        .label("Sondagem_e_Abordagem • Sondagem Completa e Abordagem Assertiva")
+                        .description("Compreender o cenário do cliente por meio de sondagem completa para conduzir argumentação personalizada.")
+                        .category("3. Sondagem, Oferta & Prazos")
                         .fatalError(false)
-                        .points(5)
+                        .points(10)
                         .displayOrder(6)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Informação correta dos Serviços Inclusos / SVA (EXA Segurança Light / TIM Banca)")
-                        .description("Mencionar corretamente os serviços inclusos no plano sem prometer SVAs divergentes.")
-                        .category("4. Oferta & Benefícios do Plano")
+                        .label("Prazos • Informação Correta de Prazos (Baixa Bancária 72h úteis / Tratativas)")
+                        .description("Informar prazos corretos de baixa bancária (até 72 horas úteis), vigência e conclusão de análises internas.")
+                        .category("3. Sondagem, Oferta & Prazos")
                         .fatalError(false)
-                        .points(4)
+                        .points(8)
                         .displayOrder(7)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Informação da Forma de Pagamento (Boleto/Débito), Vencimento, Fidelidade de 12 meses e Fatura Digital/Online")
-                        .description("Explicar forma de pagamento, dia de vencimento, fidelidade contratual de 12 meses e parametrizar fatura digital/online.")
-                        .category("5. Condições Financeiras & Fatura")
+                        .label("Descricao_e_Tabulacao • Registro Completo e Classificação Correta do Ticket")
+                        .description("Registrar todas as informações no ticket, classificar corretamente o motivo e vincular o ticket da URA sem abrir chamados duplicados.")
+                        .category("4. Tabulação & Qualidade da Comunicação")
                         .fatalError(false)
-                        .points(8)
+                        .points(10)
                         .displayOrder(8)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Confirmação completa dos Dados Cadastrais (Nome Completo, CPF, Data de Nascimento, Nome da Mãe e Titularidade)")
-                        .description("Validar todos os dados pessoais do titular da linha portada sem divergências.")
-                        .category("6. Confirmação Cadastral & Endereço")
+                        .label("Apresentacao • Abertura e Finalização em Nome da Administradora")
+                        .description("Iniciar e finalizar o atendimento formalmente em nome da administradora.")
+                        .category("4. Tabulação & Qualidade da Comunicação")
                         .fatalError(false)
-                        .points(15)
+                        .points(2)
                         .displayOrder(9)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Confirmação de Endereço Completo com CEP, Número, Complemento, Bairro, Cidade/UF e Ponto de Referência")
-                        .description("Confirmar endereço completo e ponto de referência para entrega e auditoria.")
-                        .category("6. Confirmação Cadastral & Endereço")
+                        .label("Transmite_Seguranca • Segurança, Objetividade e Ausência de Esperas Excessivas")
+                        .description("Transmitir segurança e objetividade nas informações, sem excesso de ausências durante o atendimento.")
+                        .category("4. Tabulação & Qualidade da Comunicação")
                         .fatalError(false)
-                        .points(10)
+                        .points(8)
                         .displayOrder(10)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Procedimento de Portabilidade e Portabilidade Antecipada (Instrução de SMS para 7678 com palavra TIM e prazo de 3 a 5 dias úteis)")
-                        .description("Explicar o fluxo de confirmação de portabilidade (SMS 7678 com palavra TIM quando Portabilidade Antecipada = Sim) e prazo de 3 a 5 dias úteis.")
-                        .category("7. Portabilidade & SMS 7678")
+                        .label("Linguagem • Comunicação Profissional Sem Vícios de Linguagem")
+                        .description("Ausência de vícios de linguagem ('né', 'tá', 'aí') e manutenção de comunicação profissional.")
+                        .category("4. Tabulação & Qualidade da Comunicação")
                         .fatalError(false)
-                        .points(15)
+                        .points(2)
                         .displayOrder(11)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Auditoria Completa da Venda com Aceite Explícito do Cliente")
-                        .description("Realizar a leitura completa da auditoria (titularidade, plano, valor, fidelidade e endereço) obtendo o aceite claro do cliente.")
-                        .category("8. Auditoria & Aceite")
+                        .label("Nao_Interrompe_o_Cliente • Escuta Ativa Sem Interromper o Cliente")
+                        .description("Ouvir o cliente com atenção sem interromper sua fala durante o atendimento.")
+                        .category("4. Tabulação & Qualidade da Comunicação")
                         .fatalError(false)
                         .points(5)
                         .displayOrder(12)
                         .build(),
                 EvaluationFormItem.builder()
-                        .label("Linguagem e Comunicação (Ausência de gerundismo, diminutivos como 'minutinho'/'momentinho' e muletas > 4x)")
-                        .description("Evitar gerundismo ('vai estar pagando'), diminutivos e repetição excessiva de muletas ('tá bom', 'né', 'ok', 'certo' > 4 vezes).")
-                        .category("9. Linguagem & Postura")
-                        .fatalError(false)
-                        .points(5)
+                        .label("falta_grave • Falta Grave Eliminatória (Zera a Monitoria SAC)")
+                        .description("Falha crítica de condução, omissão grave sobre impacto de cancelamento em dependentes ou postura inadequada.")
+                        .category("Falta Grave")
+                        .fatalError(true)
+                        .points(0)
                         .displayOrder(13)
-                        .build(),
-                EvaluationFormItem.builder()
-                        .label("Finalização Formal, Canais de Suporte, Aviso de Auditoria e Transferência para Pesquisa de Satisfação (sem indução)")
-                        .description("Encerrar formalmente a ligação informando canais de suporte e direcionando para a pesquisa de satisfação sem induzir nota.")
-                        .category("10. Encerramento & Pesquisa")
-                        .fatalError(false)
-                        .points(3)
-                        .displayOrder(14)
-                        .build(),
-                EvaluationFormItem.builder()
-                        .label("Falta Grave: Tabulação divergente entre os dados da gravação e a ficha de venda (CPF, Telefone, Endereço, Titularidade ou Vencimento divergentes)")
-                        .description("Divergência grave entre os dados confirmados na ligação e o cadastro registrado na proposta de venda.")
-                        .category("Falta Grave")
-                        .fatalError(true)
-                        .points(0)
-                        .displayOrder(15)
-                        .build(),
-                EvaluationFormItem.builder()
-                        .label("Falta Grave: Venda sem aceite explícito do titular, fraude cadastral ou falha crítica eliminatória no processo de portabilidade")
-                        .description("Ausência de confirmação/aceite do titular ou condução fraudulenta que invalida a venda de portabilidade.")
-                        .category("Falta Grave")
-                        .fatalError(true)
-                        .points(0)
-                        .displayOrder(16)
                         .build()
         ));
 
-        formTemplateRepository.save(formPortabilidade);
+        formTemplateRepository.save(formSac);
+        log.info("Formulário '{}' (100 pts) cadastrado com sucesso!", formName);
+    }
+
+    private void ensureRetencaoFormTemplate() {
+        String formName = "Monitoria Retenção";
+        boolean exists = formTemplateRepository.findAll().stream()
+                .anyMatch(f -> f.getName().equalsIgnoreCase(formName));
+        if (exists) {
+            return;
+        }
+
+        User creator = userRepository.findByEmailIgnoreCase("gestor@empresa.com")
+                .or(() -> userRepository.findByEmailIgnoreCase("admin@empresa.com"))
+                .orElse(null);
+
+        EvaluationFormTemplate formRetencao = EvaluationFormTemplate.builder()
+                .name(formName)
+                .description("Formulário oficial de Monitoria de Retenção (100 pontos) com avaliação de Confirmação de Dados, Produto, Protocolo, Oferta de Desconto, Sondagem/Abordagem, Prazos, Registro Correto, Abertura/Encerramento, Segurança/Clareza, Linguagem e Cordialidade/Empatia.")
+                .sector("Cobrança & Retenção")
+                .passingScorePercentage(new BigDecimal("80.00"))
+                .version(1)
+                .active(true)
+                .createdBy(creator)
+                .build();
+
+        formRetencao.clearAndSetItems(List.of(
+                EvaluationFormItem.builder()
+                        .label("Confirmacao_de_Dados • Confirmação de CPF, E-mail e Telefone com o Titular")
+                        .description("Confirmar CPF, e-mail (soletrando quando necessário) e telefone diretamente com o titular do plano.")
+                        .category("1. Segurança, Protocolo & Produto")
+                        .fatalError(false)
+                        .points(10)
+                        .displayOrder(1)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Produto • Domínio do Produto (Coparticipação Futura, Cobrança Proporcional e Clube de Vantagens)")
+                        .description("Explicar regras de coparticipação após cancelamento, cobrança proporcional, cobertura de urgência/emergência, Clube de Vantagens e benefício farmácia.")
+                        .category("1. Segurança, Protocolo & Produto")
+                        .fatalError(false)
+                        .points(10)
+                        .displayOrder(2)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Protocolo • Informe do Número de Protocolo")
+                        .description("Informar corretamente o número de protocolo do atendimento.")
+                        .category("1. Segurança, Protocolo & Produto")
+                        .fatalError(false)
+                        .points(10)
+                        .displayOrder(3)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Oferta_de_Desconto • Oferta de Desconto Anual / Migração / Alteração de Plano + Print")
+                        .description("Realizar oferta de desconto destacando o benefício anual, avaliar migração ou alteração de plano (mantendo carências) e anexar print da tela.")
+                        .category("2. Retenção, Sondagem & Negociação")
+                        .fatalError(false)
+                        .points(10)
+                        .displayOrder(4)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Sondagem__Abordagem • Sondagem Profunda e Argumentação de Retenção")
+                        .description("Investigar o real motivo do cancelamento, sondar propostas da concorrência (modalidade/valor) e argumentar sobre a importância de manter o plano ativo.")
+                        .category("2. Retenção, Sondagem & Negociação")
+                        .fatalError(false)
+                        .points(15)
+                        .displayOrder(5)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Prazos • Informe de Prazos (Carta de Cancelamento 24h, Boleto e Prazos ANS)")
+                        .description("Informar prazo de envio da carta de cancelamento por e-mail (até 24h), disponibilização de boletos e prazos regulamentares da ANS.")
+                        .category("3. Prazos & Registro")
+                        .fatalError(false)
+                        .points(10)
+                        .displayOrder(6)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Registro_Correto • Tabulação Organizada, Vínculo de Tickets e Prints Abaixo")
+                        .description("Registrar o real motivo do contato de forma organizada, relacionar tickets anteriores sem duplicidade e inserir prints abaixo da tabulação.")
+                        .category("3. Prazos & Registro")
+                        .fatalError(false)
+                        .points(10)
+                        .displayOrder(7)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Abertura__Encerramento • Abertura Ágil Sem Ausência Inicial e Encerramento Formal")
+                        .description("Iniciar prontamente o atendimento sem excesso de ausência e encerrar de forma cordial e completa.")
+                        .category("4. Postura, Clareza & Comunicação")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(8)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Seguranca___Clareza_e_Objetividade • Segurança, Clareza, Objetividade e Agilidade")
+                        .description("Transmitir informações corretas e seguras (sem divergência de carteirinha/vigência) e manter agilidade sem ausências prolongadas.")
+                        .category("4. Postura, Clareza & Comunicação")
+                        .fatalError(false)
+                        .points(10)
+                        .displayOrder(9)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Linguagem • Ausência de Vícios de Linguagem ('tá', 'aí', 'certo', 'né', 'no caso')")
+                        .description("Comunicação clara e profissional sem repetição de muletas ou vícios de linguagem.")
+                        .category("4. Postura, Clareza & Comunicação")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(10)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("Cordialidade_e_Empatia • Empatia, Paciência e Acolhimento Sem Demonstrar Pressa")
+                        .description("Demonstrar empatia, paciência e atenção às necessidades da família/cliente sem pressa para finalizar.")
+                        .category("4. Postura, Clareza & Comunicação")
+                        .fatalError(false)
+                        .points(5)
+                        .displayOrder(11)
+                        .build(),
+                EvaluationFormItem.builder()
+                        .label("falta_grave • Falta Grave Eliminatória (Zera a Monitoria de Retenção)")
+                        .description("Exclusão/alteração indevida de dados do titular sem autorização, fraude de retenção ou conduta grave.")
+                        .category("Falta Grave")
+                        .fatalError(true)
+                        .points(0)
+                        .displayOrder(12)
+                        .build()
+        ));
+
+        formTemplateRepository.save(formRetencao);
         log.info("Formulário '{}' (100 pts) cadastrado com sucesso!", formName);
     }
 }

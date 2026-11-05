@@ -47,6 +47,13 @@ public class User {
     @Builder.Default
     private boolean active = true;
 
+    @Column(name = "must_change_password", nullable = false)
+    @Builder.Default
+    private boolean mustChangePassword = false;
+
+    @Column(name = "password_changed_at")
+    private OffsetDateTime passwordChangedAt;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 

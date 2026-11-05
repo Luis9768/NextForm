@@ -1,12 +1,15 @@
 package com.formshq.service;
 
+import com.formshq.domain.entity.EvaluationFormTemplate;
 import com.formshq.domain.entity.Sector;
 import com.formshq.domain.entity.User;
 import com.formshq.domain.enums.Role;
 import com.formshq.dto.sector.SectorRequest;
 import com.formshq.dto.sector.SectorResponse;
+import com.formshq.exception.BusinessRuleException;
 import com.formshq.exception.DuplicateResourceException;
 import com.formshq.exception.ResourceNotFoundException;
+import com.formshq.repository.EvaluationFormTemplateRepository;
 import com.formshq.repository.SectorRepository;
 import com.formshq.repository.UserRepository;
 import com.formshq.security.UserPrincipal;
@@ -27,6 +30,7 @@ public class SectorService {
 
     private final SectorRepository sectorRepository;
     private final UserRepository userRepository;
+    private final EvaluationFormTemplateRepository formTemplateRepository;
 
     @Transactional(readOnly = true)
     public List<SectorResponse> listSectors(boolean onlyActive, UserPrincipal caller) {
@@ -80,6 +84,7 @@ public class SectorService {
         Sector sector = sectorRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Setor não encontrado com ID: " + id));
 
+        String oldName = sector.getName().trim();
         String newName = request.name().trim();
         sectorRepository.findByNameIgnoreCase(newName).ifPresent(existing -> {
             if (!existing.getId().equals(id)) {
@@ -98,13 +103,60 @@ public class SectorService {
             sector.setActive(request.active());
         }
 
-        return SectorResponse.fromEntity(sectorRepository.save(sector));
+        Sector saved = sectorRepository.save(sector);
+
+        // Propaga renomeação do setor para colaboradores e matrizes vinculadas (evitando órfãos)
+        if (!oldName.equalsIgnoreCase(newName)) {
+            for (User u : userRepository.findAll()) {
+                boolean userChanged = false;
+                if (u.getDepartment() != null && u.getDepartment().trim().equalsIgnoreCase(oldName)) {
+                    u.setDepartment(newName);
+                    userChanged = true;
+                }
+                if (u.getAllowedSectors() != null && !u.getAllowedSectors().isBlank()) {
+                    List<String> updatedAllowed = Arrays.stream(u.getAllowedSectors().split(","))
+                            .map(String::trim)
+                            .filter(s -> !s.isEmpty())
+                            .map(s -> s.equalsIgnoreCase(oldName) ? newName : s)
+                            .toList();
+                    String joined = String.join(",", updatedAllowed);
+                    if (!joined.equals(u.getAllowedSectors())) {
+                        u.setAllowedSectors(joined);
+                        userChanged = true;
+                    }
+                }
+                if (userChanged) {
+                    userRepository.save(u);
+                }
+            }
+            for (EvaluationFormTemplate ft : formTemplateRepository.findAll()) {
+                if (ft.getSector() != null && ft.getSector().trim().equalsIgnoreCase(oldName)) {
+                    ft.setSector(newName);
+                    formTemplateRepository.save(ft);
+                }
+            }
+        }
+
+        return SectorResponse.fromEntity(saved);
     }
 
     @Transactional
     public void deleteSector(UUID id) {
         Sector sector = sectorRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Setor não encontrado com ID: " + id));
+
+        String sectorName = sector.getName().trim();
+        long linkedUsersCount = userRepository.findAll().stream()
+                .filter(u -> u.isActive() && u.getDepartment() != null && u.getDepartment().trim().equalsIgnoreCase(sectorName))
+                .count();
+
+        if (linkedUsersCount > 0) {
+            throw new BusinessRuleException(
+                    "Não é possível excluir o setor '" + sectorName + "' pois existem " + linkedUsersCount
+                            + " colaboradores ativos vinculados a ele. Transfira os colaboradores antes de excluir."
+            );
+        }
+
         sectorRepository.delete(sector);
     }
 

@@ -73,14 +73,9 @@ export default function AnalystsDirectoryPage() {
           <div className="flex items-center gap-2.5">
             <Users className="h-5 w-5 text-zinc-400 shrink-0" />
             <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
-              Perfis da Equipe de Analistas (Selecione para Avaliar)
+              Analistas
             </h1>
           </div>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-            Clique no perfil da analista para digitar o número do cliente,
-            selecionar a chamada, criar um formulário específico para a ligação
-            e realizar a escuta e avaliação.
-          </p>
         </motion.div>
 
         {isLoading || !summary ? (
@@ -130,7 +125,7 @@ export default function AnalystsDirectoryPage() {
                   <div className="space-y-1.5">
                     <label className="text-[11px] text-zinc-400 flex items-center gap-1.5">
                       <UserCheck className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
-                      <span>Setor do Analista (Carrega Matriz do Setor):</span>
+                      <span>Setor</span>
                     </label>
                     <select
                       value={analyst.department}
@@ -192,7 +187,7 @@ export default function AnalystsDirectoryPage() {
                     className="w-full h-10 px-4 rounded-xl bg-zinc-900 text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-sm whitespace-nowrap"
                   >
                     <Phone className="h-3.5 w-3.5 shrink-0" />
-                    <span>Abrir Perfil & Buscar Chamada</span>
+                    <span>Avaliar</span>
                     <ArrowRight className="h-3.5 w-3.5 shrink-0" />
                   </Link>
                 </div>

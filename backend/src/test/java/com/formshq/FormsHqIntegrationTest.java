@@ -389,4 +389,141 @@ class FormsHqIntegrationTest {
                 .andExpect(jsonPath("$.sectorAverages").isArray())
                 .andExpect(jsonPath("$.criteriaComparison").isArray());
     }
+
+    @Test
+    @DisplayName("Deve importar avaliações do Directus (SAC, Retenção e Aquisição) com idempotência e provisionamento automático de operadores")
+    void shouldImportDirectusEvaluationsIdempotently() throws Exception {
+        String batchPayload = """
+                {
+                  "collection": "Monitoria_SAC",
+                  "items": [
+                    {
+                      "id": 99901,
+                      "Ticket": "#99901",
+                      "Nota_final": 73,
+                      "Operador": { "first_name": "Keila" },
+                      "Data_monitoria": "2026-10-23T12:00:00",
+                      "Data_do_Atendimento": "2026-10-19T12:00:00",
+                      "Audio_Chamada": "2682f196-5633-442e-b5d9-297c7420dd86",
+                      "Confirmacao_de_Dados": 10,
+                      "Realizou_todos_procedimentos_corretamente": 0,
+                      "Orientou_o_cliente": 10,
+                      "Informou_n_de_protocolo_no_inicio_da_ligacao": 10,
+                      "Oferta_de_Desconto": 10,
+                      "Sondagem_e_Abordagem": 10,
+                      "Prazos": 8,
+                      "Descricao_e_Tabulacao": 0,
+                      "Apresentacao": 0,
+                      "Transmite_Seguranca": 8,
+                      "Linguagem": 2,
+                      "Nao_Interrompe_o_Cliente": 5,
+                      "falta_grave": null,
+                      "Breve_resumo_do_atendimento": "Teste de importação Directus SAC"
+                    }
+                  ]
+                }
+                """;
+
+        // 1ª chamada com X-API-KEY -> Importa 1 registro
+        mockMvc.perform(post("/api/v1/integrations/directus/import")
+                        .header("X-API-KEY", "test-n8n-secret-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(batchPayload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.importedCount").value(1))
+                .andExpect(jsonPath("$.skippedDuplicates").value(0));
+
+        // 2ª chamada idêntica -> Idempotente (skippedDuplicates = 1, importedCount = 0)
+        mockMvc.perform(post("/api/v1/integrations/directus/import")
+                        .header("X-API-KEY", "test-n8n-secret-key")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(batchPayload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.importedCount").value(0))
+                .andExpect(jsonPath("$.skippedDuplicates").value(1));
+    }
+
+    @Test
+    @DisplayName("Deve exigir troca de senha no 1º acesso e respeitar hierarquia RBAC na alteração de senhas por Gestor e Admin")
+    void shouldEnforceFirstAccessAndRbacPasswordManagement() throws Exception {
+        String adminToken = loginAndGetToken("admin@empresa.com", "Admin@123");
+        String gestorToken = loginAndGetToken("gestor@empresa.com", "Gestor@123");
+
+        // 1. Cria novo analista (nasce com mustChangePassword = true)
+        MvcResult createRes = mockMvc.perform(post("/api/v1/users")
+                        .header("Authorization", "Bearer " + gestorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Operador Primeiro Acesso\",\"email\":\"primeiro.acesso@empresa.com\",\"password\":\"Inicial@2026\",\"role\":\"ROLE_ANALISTA\",\"department\":\"SAC\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.mustChangePassword").value(true))
+                .andReturn();
+
+        JsonNode createdAnalyst = objectMapper.readTree(createRes.getResponse().getContentAsString());
+        String analystId = createdAnalyst.get("id").asText();
+
+        // 2. O analista faz login no 1º acesso e troca sua própria senha
+        String analystToken = loginAndGetToken("primeiro.acesso@empresa.com", "Inicial@2026");
+
+        // Tentar repetir a senha atual deve falhar (400)
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + analystToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newPassword\":\"Inicial@2026\",\"confirmPassword\":\"Inicial@2026\"}"))
+                .andExpect(status().isBadRequest());
+
+        // Definir nova senha pessoal -> mustChangePassword = false
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer " + analystToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newPassword\":\"NovaSenha@99\",\"confirmPassword\":\"NovaSenha@99\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mustChangePassword").value(false));
+
+        // 3. Gestor consegue trocar a senha de um Analista -> 200 OK
+        mockMvc.perform(patch("/api/v1/users/" + analystId + "/password")
+                        .header("Authorization", "Bearer " + gestorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newPassword\":\"ResetGestor@1\",\"confirmPassword\":\"ResetGestor@1\",\"forceChangeOnNextLogin\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mustChangePassword").value(true));
+
+        // 4. Gestor NÃO consegue trocar a senha de um Gestor ou Admin -> 403 Forbidden
+        MvcResult gestoresRes = mockMvc.perform(get("/api/v1/users?role=ROLE_GESTOR")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andReturn();
+        String gestorId = objectMapper.readTree(gestoresRes.getResponse().getContentAsString()).get(0).get("id").asText();
+
+        mockMvc.perform(patch("/api/v1/users/" + gestorId + "/password")
+                        .header("Authorization", "Bearer " + gestorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newPassword\":\"Tentativa@123\",\"confirmPassword\":\"Tentativa@123\"}"))
+                .andExpect(status().isForbidden());
+
+        // 5. Admin consegue trocar a senha de um Gestor -> 200 OK
+        mockMvc.perform(patch("/api/v1/users/" + gestorId + "/password")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newPassword\":\"Gestor@123\",\"confirmPassword\":\"Gestor@123\",\"forceChangeOnNextLogin\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mustChangePassword").value(false));
+
+        // 6. Gestor NÃO pode escalar privilégio criando usuário ROLE_ADMIN -> 403 Forbidden
+        mockMvc.perform(post("/api/v1/users")
+                        .header("Authorization", "Bearer " + gestorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Fake Admin\",\"email\":\"fake.admin@empresa.com\",\"password\":\"Senha@123\",\"role\":\"ROLE_ADMIN\",\"department\":\"SAC\"}"))
+                .andExpect(status().isForbidden());
+
+        // 7. Inativar analista revoga imediatamente seu token JWT existente -> 401 Unauthorized
+        mockMvc.perform(patch("/api/v1/users/" + analystId + "/status")
+                        .header("Authorization", "Bearer " + gestorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\": false}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/auth/me")
+                        .header("Authorization", "Bearer " + analystToken))
+                .andExpect(status().isUnauthorized());
+    }
 }

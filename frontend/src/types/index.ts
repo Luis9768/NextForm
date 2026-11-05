@@ -14,6 +14,7 @@ export interface UserSummary {
   managerName?: string | null;
   allowedSectors?: string[];
   active: boolean;
+  mustChangePassword?: boolean;
 }
 
 export interface SectorTransitionLog {

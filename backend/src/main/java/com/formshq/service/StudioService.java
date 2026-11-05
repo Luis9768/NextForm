@@ -79,7 +79,7 @@ public class StudioService {
                                 "op-webhook-post-directus",
                                 "POST Webhook n8n / Directus",
                                 "request",
-                                "POST ${CUSTOMER_WEBHOOK_URL}/webhook/buscar-dados-directus"
+                                "POST ${CUSTOMER_WEBHOOK_URL}"
                         ),
                         new FlowOperationDto(
                                 "op-preencher-contato",
@@ -88,96 +88,26 @@ public class StudioService {
                                 "{\n  \"nome\": \"{{ $last.Nome }}\",\n  \"cpf\": \"{{ $last.CPF }}\",\n  \"nome_da_mae\": \"{{ $last.Nome_da_mae }}\",\n  \"nome_do_pai\": \"{{ $last.Nome_do_pai }}\",\n  \"telefone\": \"{{ $trigger.telefone }}\"\n}"
                         )
                 ),
-                45,
-                OffsetDateTime.now().minusMinutes(2),
-                "SUCCESS"
+                0,
+                OffsetDateTime.now(),
+                "READY"
         ));
 
         studioFlows.add(new StudioFlowDto(
-                "flow-fatal-error-alert",
-                "Alerta Automático RH & Gestão • Erro Grave Detectado",
-                "Dispara imediatamente quando uma avaliação é submetida com item de Erro Grave marcado (Nota = 0%).",
+                "flow-directus-evaluations-sync",
+                "Sincronização de Usuários & Avaliações Directus",
+                "Importa operadores, monitores e avaliações das coleções Monitoria_SAC, Monitoria_Retencao e Monitoria_Tim_Aquisicao.",
                 "ACTIVE",
-                "EVENT_HOOK",
-                "evaluations.items.create",
+                "REST_SYNC",
+                "integrations.directus.pull",
                 List.of(
-                        new FlowOperationDto("op-1", "Condição: fatalErrorTriggered == true", "condition", "{ \"fatalErrorTriggered\": { \"_eq\": true } }"),
-                        new FlowOperationDto("op-2", "Gerar Alerta PDI / RH 1:1", "notification", "Envia notificação prioritária para Coordenação QA e RH"),
-                        new FlowOperationDto("op-3", "Webhook Externo n8n / Slack", "request", "POST https://hooks.empresa.com/qa/fatal-alert")
+                        new FlowOperationDto("op-dir-users", "GET /users (Directus)", "request", "GET ${DIRECTUS_BASE_URL}/users?fields=id,first_name,last_name,email,role.*"),
+                        new FlowOperationDto("op-dir-items", "GET /items/{collection}?fields=*.*", "request", "GET ${DIRECTUS_BASE_URL}/items/{collection}?fields=*.*"),
+                        new FlowOperationDto("op-r2-audio", "Armazenamento de Áudios no Cloudflare R2", "item-update", "PUT s3://${R2_BUCKET}/{audioKey}")
                 ),
-                12,
-                OffsetDateTime.now().minusMinutes(18),
-                "SUCCESS"
-        ));
-
-        studioFlows.add(new StudioFlowDto(
-                "flow-n8n-call-enrichment",
-                "Enriquecimento CRM no Recebimento de Ligação n8n",
-                "Ao receber uma gravação no webhook n8n, consulta a API externa de clientes pelo telefone e vincula o protocolo.",
-                "ACTIVE",
-                "WEBHOOK",
-                "call_records.items.create",
-                List.of(
-                        new FlowOperationDto("op-4", "Normalizar Telefone E.164", "transform", "CustomerLookupService.normalizePhone($trigger.phone)"),
-                        new FlowOperationDto("op-5", "Lookup Cliente REST API", "request", "GET /api/v1/customers/lookup?phone={{phone}}"),
-                        new FlowOperationDto("op-6", "Vincular Analista & Fila QA", "item-update", "Atualiza call_records com customer_id e status PENDENTE")
-                ),
-                28,
-                OffsetDateTime.now().minusMinutes(5),
-                "SUCCESS"
-        ));
-
-        studioFlows.add(new StudioFlowDto(
-                "flow-weekly-benchmark-digest",
-                "Consolidação de Benchmark Semanal da Equipe",
-                "Calcula o ranking ponderado dos analistas, aderência por bloco do formulário e exporta relatório executivo.",
-                "ACTIVE",
-                "SCHEDULE_CRON",
-                "cron(0 8 * * 1)",
-                List.of(
-                        new FlowOperationDto("op-7", "Agregar Snapshots da Semana", "read-data", "SELECT AVG(final_score_percentage) FROM evaluations"),
-                        new FlowOperationDto("op-8", "Comparar com Meta Benchmark (80%)", "condition", "Identifica analistas acima de 85% (Top Performers) e abaixo de 75%"),
-                        new FlowOperationDto("op-9", "Publicar Painel Indicadores", "log", "Atualiza indicadores de Benchmark & RH")
-                ),
-                6,
-                OffsetDateTime.now().minusHours(3),
-                "SUCCESS"
-        ));
-
-        studioWebhooks.add(new StudioWebhookDto(
-                "wh-n8n-outbound",
-                "n8n • Gatilho Pós-Avaliação de Ligação",
-                "POST",
-                "https://n8n.empresa.com/webhook/nexform-evaluation-completed",
-                "ACTIVE",
-                List.of("create"),
-                List.of("evaluations"),
-                34,
-                "200 OK"
-        ));
-
-        studioWebhooks.add(new StudioWebhookDto(
-                "wh-rh-pdi-sync",
-                "Sistema RH • Sincronização de Notas e Feedback 1:1",
-                "POST",
-                "https://api.rh-corporativo.empresa.com/v1/performance/reviews",
-                "ACTIVE",
-                List.of("create", "update"),
-                List.of("evaluations", "users"),
-                19,
-                "201 Created"
-        ));
-
-        studioWebhooks.add(new StudioWebhookDto(
-                "wh-crm-protocol-sync",
-                "CRM Atendimento • Atualização de Auditoria de Protocolo",
-                "POST",
-                "https://api.crm-externo.empresa.com/v1/calls/audit-status",
-                "INACTIVE",
-                List.of("create"),
-                List.of("call_records", "evaluations"),
-                8,
-                "200 OK"
+                0,
+                OffsetDateTime.now(),
+                "READY"
         ));
 
         studioRoles.add(new StudioRoleDto(
@@ -223,19 +153,39 @@ public class StudioService {
         ));
 
         studioPolicies.add(new StudioPolicyDto(
-                "policy-admin-full",
-                "Política Gestora QA • Controle Total",
-                "ROLE_GESTOR",
-                "Permissão total de criação, leitura, edição de pesos e execução de fluxos em todas as coleções.",
+                "policy-diretor-admin",
+                "Política Diretoria & Governança • Acesso Total",
+                "ROLE_ADMIN",
+                "Controle global da plataforma, gestão exclusiva de setores (/sectors), delegação de escopo por gestor e administração de usuários.",
                 "0.0.0.0/0",
                 true,
                 true,
                 List.of(
+                        new PolicyRuleDto("sectors", "FULL", "FULL", "FULL", "FULL", "FULL", "{}"),
+                        new PolicyRuleDto("users", "FULL", "FULL", "FULL", "SOFT", "FULL", "{}"),
                         new PolicyRuleDto("call_records", "FULL", "FULL", "FULL", "NONE", "FULL", "{}"),
                         new PolicyRuleDto("evaluations", "FULL", "FULL", "IMMUTABLE", "NONE", "FULL", "{}"),
                         new PolicyRuleDto("evaluation_form_templates", "FULL", "FULL", "FULL", "SOFT", "FULL", "{}"),
                         new PolicyRuleDto("customers", "FULL", "FULL", "FULL", "NONE", "FULL", "{}"),
-                        new PolicyRuleDto("users", "FULL", "FULL", "FULL", "NONE", "NONE", "{}"),
+                        new PolicyRuleDto("sys_flows", "FULL", "FULL", "FULL", "FULL", "FULL", "{}")
+                )
+        ));
+
+        studioPolicies.add(new StudioPolicyDto(
+                "policy-admin-full",
+                "Política Gestão QA • Escopo de Setores Autorizados",
+                "ROLE_GESTOR",
+                "Permissão para avaliar ligações, editar matrizes de formulários e gerenciar analistas vinculados aos setores autorizados.",
+                "0.0.0.0/0",
+                false,
+                true,
+                List.of(
+                        new PolicyRuleDto("sectors", "NONE", "CUSTOM", "NONE", "NONE", "NONE", "{ \"sector\": { \"_in\": \"$ALLOWED_SECTORS\" } }"),
+                        new PolicyRuleDto("users", "CUSTOM", "CUSTOM", "CUSTOM", "SOFT", "NONE", "{ \"department\": { \"_in\": \"$ALLOWED_SECTORS\" } }"),
+                        new PolicyRuleDto("call_records", "FULL", "CUSTOM", "FULL", "NONE", "FULL", "{ \"sector\": { \"_in\": \"$ALLOWED_SECTORS\" } }"),
+                        new PolicyRuleDto("evaluations", "FULL", "CUSTOM", "IMMUTABLE", "NONE", "FULL", "{ \"sector\": { \"_in\": \"$ALLOWED_SECTORS\" } }"),
+                        new PolicyRuleDto("evaluation_form_templates", "FULL", "FULL", "FULL", "SOFT", "FULL", "{}"),
+                        new PolicyRuleDto("customers", "FULL", "FULL", "FULL", "NONE", "FULL", "{}"),
                         new PolicyRuleDto("sys_flows", "FULL", "FULL", "FULL", "FULL", "FULL", "{}")
                 )
         ));
@@ -463,47 +413,8 @@ public class StudioService {
                 "Gera dossiê individual em PDF com histórico de notas, aderência por bloco e plano de ação para feedback com o analista.",
                 false,
                 false,
-                6420,
+                0,
                 true
-        ));
-
-        studioFeedback.add(new StudioFeedbackDto(
-                "fb-feat-1",
-                "FEATURE",
-                "Exportação em lote de relatórios de PDI para reunião mensal de calibração",
-                "Indicadores & RH",
-                "ENHANCEMENT",
-                "PLANEJADO",
-                14,
-                "Beatriz Almeida (Gestora de Qualidade)",
-                OffsetDateTime.now().minusDays(2).toString(),
-                "Permitir selecionar múltiplos analistas na tela de Benchmarks e exportar o comparativo trimestral de evolução."
-        ));
-
-        studioFeedback.add(new StudioFeedbackDto(
-                "fb-feat-2",
-                "FEATURE",
-                "Marcador de minuto/segundo no player de áudio ao sinalizar Erro Grave",
-                "Player de Áudio",
-                "ENHANCEMENT",
-                "EM_ANALISE",
-                9,
-                "Beatriz Almeida (Gestora de Qualidade)",
-                OffsetDateTime.now().minusDays(1).toString(),
-                "Salvar o segundo exato da gravação (ex: 01:42) quando a gestora marcar um item eliminatório."
-        ));
-
-        studioFeedback.add(new StudioFeedbackDto(
-                "fb-bug-1",
-                "BUG",
-                "Normalização automática de DDD quando telefone vem sem DDI +55 do PABX legado",
-                "Busca de Clientes CRM",
-                "LOW",
-                "RESOLVIDO",
-                4,
-                "Equipe Engenharia QA",
-                OffsetDateTime.now().minusDays(4).toString(),
-                "Telefones enviados apenas com 11 dígitos agora recebem prefixo +55 automaticamente no serviço de lookup."
         ));
     }
 

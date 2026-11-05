@@ -16,7 +16,8 @@ public record UserSummaryDto(
         UUID managerId,
         String managerName,
         List<String> allowedSectors,
-        boolean active
+        boolean active,
+        boolean mustChangePassword
 ) {
     public static UserSummaryDto fromEntity(User user) {
         if (user == null) {
@@ -38,7 +39,8 @@ public record UserSummaryDto(
                 user.getManager() != null ? user.getManager().getId() : null,
                 user.getManager() != null ? user.getManager().getName() : null,
                 parsedSectors,
-                user.isActive()
+                user.isActive(),
+                user.isMustChangePassword()
         );
     }
 }

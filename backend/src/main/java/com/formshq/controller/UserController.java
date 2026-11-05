@@ -1,6 +1,7 @@
 package com.formshq.controller;
 
 import com.formshq.domain.enums.Role;
+import com.formshq.dto.auth.AdminChangePasswordRequest;
 import com.formshq.dto.auth.ChangeSectorRequest;
 import com.formshq.dto.auth.CreateUserRequest;
 import com.formshq.dto.auth.SectorTransitionLogDto;
@@ -49,9 +50,12 @@ public class UserController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('ROLE_GESTOR')")
-    @Operation(summary = "Cadastra um novo Analista, Gestor ou Administrador")
-    public ResponseEntity<UserSummaryDto> createUser(@Valid @RequestBody CreateUserRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(userService.createUser(request));
+    @Operation(summary = "Cadastra um novo Analista (Gestor/Admin) ou Gestor/Administrador (exclusivo Admin)")
+    public ResponseEntity<UserSummaryDto> createUser(
+            @Valid @RequestBody CreateUserRequest request,
+            @AuthenticationPrincipal UserPrincipal currentUser
+    ) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(userService.createUser(request, currentUser));
     }
 
     @PatchMapping("/{id}/status")
@@ -64,6 +68,27 @@ public class UserController {
     ) {
         Boolean desiredActive = (body != null) ? body.get("active") : null;
         return ResponseEntity.ok(userService.toggleUserStatus(id, desiredActive, currentUser));
+    }
+
+    @PatchMapping("/{id}/password")
+    @PreAuthorize("hasAuthority('ROLE_GESTOR')")
+    @Operation(summary = "Altera a senha de um usuário (Gestor altera apenas Analistas; Admin altera Gestores e Analistas)")
+    public ResponseEntity<UserSummaryDto> changeUserPassword(
+            @PathVariable UUID id,
+            @Valid @RequestBody AdminChangePasswordRequest request,
+            @AuthenticationPrincipal UserPrincipal currentUser
+    ) {
+        return ResponseEntity.ok(userService.changeUserPassword(id, request, currentUser));
+    }
+
+    @PostMapping("/{id}/reset-first-access")
+    @PreAuthorize("hasAuthority('ROLE_GESTOR')")
+    @Operation(summary = "Redefine a senha do usuário para a credencial de primeiro acesso configurada no servidor (sem expor senha no frontend)")
+    public ResponseEntity<UserSummaryDto> resetUserToFirstAccessPassword(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal currentUser
+    ) {
+        return ResponseEntity.ok(userService.resetToFirstAccessPassword(id, currentUser));
     }
 
     @PatchMapping("/{id}/sector")

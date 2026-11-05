@@ -4,6 +4,7 @@ import {
   CallRecord,
   CallStatus,
   CreateEvaluationInput,
+  CustomerInfo,
   CustomerLookupResponse,
   DashboardSummary,
   Evaluation,
@@ -48,6 +49,26 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      typeof window !== "undefined" &&
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      !error.config?.url?.includes("/auth/login") &&
+      !error.config?.url?.includes("/integrations/n8n")
+    ) {
+      localStorage.removeItem("formshq_token");
+      localStorage.removeItem("formshq_user");
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export function extractErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
     const data = err.response?.data as
@@ -73,6 +94,16 @@ export const authApi = {
   },
   me: async (): Promise<UserSummary> => {
     const { data } = await api.get<UserSummary>("/auth/me");
+    return data;
+  },
+  changeOwnPassword: async (payload: {
+    newPassword: string;
+    confirmPassword: string;
+  }): Promise<UserSummary> => {
+    const { data } = await api.post<UserSummary>(
+      "/auth/change-password",
+      payload
+    );
     return data;
   },
 };
@@ -347,6 +378,26 @@ export const usersApi = {
     });
     return data;
   },
+  changePassword: async (
+    id: string,
+    payload: {
+      newPassword: string;
+      confirmPassword: string;
+      forceChangeOnNextLogin?: boolean;
+    }
+  ): Promise<UserSummary> => {
+    const { data } = await api.patch<UserSummary>(
+      `/users/${id}/password`,
+      payload
+    );
+    return data;
+  },
+  resetFirstAccess: async (id: string): Promise<UserSummary> => {
+    const { data } = await api.post<UserSummary>(
+      `/users/${id}/reset-first-access`
+    );
+    return data;
+  },
   updateAllowedSectors: async (
     id: string,
     allowedSectors: string[]
@@ -596,6 +647,99 @@ export const studioApi = {
   getBenchmarks: async (): Promise<StudioBenchmarkResponse> => {
     const { data } = await api.get<StudioBenchmarkResponse>(
       "/studio/benchmarks"
+    );
+    return data;
+  },
+};
+
+export interface DirectusSyncResult {
+  source: string;
+  processedCollections: string[];
+  totalReceived: number;
+  importedCount: number;
+  skippedDuplicates: number;
+  failedCount: number;
+  provisionedAnalysts: string[];
+  importedEvaluationCodes: string[];
+  warnings: string[];
+  syncedAt: string;
+}
+
+export interface DirectusUserSyncResult {
+  source: string;
+  totalDirectusUsersFetched: number;
+  syncedUsersCount: number;
+  purgedFictionalUsers: number;
+  purgedFictionalEvaluations: number;
+  purgedFictionalCalls: number;
+  purgedFictionalForms: number;
+  purgedFictionalSectors: number;
+  usersBySector: Record<string, number>;
+  managersAndAdmins: string[];
+  syncedAt: string;
+}
+
+export const directusApi = {
+  syncUsers: async (payload?: {
+    baseUrl?: string;
+    apiToken?: string;
+  }): Promise<DirectusUserSyncResult> => {
+    const params: Record<string, string> = {};
+    if (payload?.baseUrl) params.baseUrl = payload.baseUrl;
+    if (payload?.apiToken) params.apiToken = payload.apiToken;
+    const { data } = await api.post<DirectusUserSyncResult>(
+      "/integrations/directus/sync-users",
+      null,
+      { params: Object.keys(params).length > 0 ? params : undefined }
+    );
+    return data;
+  },
+  pullSingleItem: async (payload: {
+    collection: string;
+    itemId: string;
+    baseUrl?: string;
+    apiToken?: string;
+  }): Promise<DirectusSyncResult> => {
+    const params: Record<string, string> = {};
+    if (payload.baseUrl) params.baseUrl = payload.baseUrl;
+    if (payload.apiToken) params.apiToken = payload.apiToken;
+    const { data } = await api.post<DirectusSyncResult>(
+      `/integrations/directus/items/${encodeURIComponent(
+        payload.collection
+      )}/${encodeURIComponent(payload.itemId)}`,
+      null,
+      { params: Object.keys(params).length > 0 ? params : undefined }
+    );
+    return data;
+  },
+  pullFromApi: async (payload: {
+    baseUrl?: string;
+    apiToken?: string;
+    collection?: string;
+    limit?: number;
+  }): Promise<DirectusSyncResult> => {
+    const { data } = await api.post<DirectusSyncResult>(
+      "/integrations/directus/pull",
+      payload
+    );
+    return data;
+  },
+  importBatch: async (payload: {
+    collection?: string;
+    directusBaseUrl?: string;
+    items: Record<string, unknown>[];
+  }): Promise<DirectusSyncResult> => {
+    const { data } = await api.post<DirectusSyncResult>(
+      "/integrations/directus/import",
+      payload
+    );
+    return data;
+  },
+  importSamples: async (
+    limitPerCollection = 5
+  ): Promise<DirectusSyncResult> => {
+    const { data } = await api.post<DirectusSyncResult>(
+      `/integrations/directus/import-samples?limitPerCollection=${limitPerCollection}`
     );
     return data;
   },

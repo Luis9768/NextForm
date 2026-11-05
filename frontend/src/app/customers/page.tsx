@@ -19,49 +19,16 @@ import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
 import { useAuth } from "@/context/AuthContext";
 import { customersApi, extractErrorMessage } from "@/lib/api";
 import {
+  extractCleanPhoneDigits,
   formatDateTime,
   formatDuration,
   getEvaluationStatusBadge,
+  stripPlus55,
 } from "@/lib/utils";
 import { CustomerLookupResponse } from "@/types";
 
 const DIRECTUS_WEBHOOK_URL =
   process.env.NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL || "";
-
-const DEMO_KEYS = [
-  {
-    label: "Tel: 11999999999 • Roberto Prado",
-    value: "11999999999",
-    type: "TELEFONE",
-  },
-  {
-    label: "CPF: 348.912.408-55 • Roberto Prado",
-    value: "348.912.408-55",
-    type: "CPF",
-  },
-  {
-    label: "CPF: 419.220.118-30 • Fernanda Santos",
-    value: "419.220.118-30",
-    type: "CPF",
-  },
-];
-
-function stripPlus55(raw: string): string {
-  const trimmed = (raw || "").trim();
-  if (trimmed.startsWith("+55")) {
-    return trimmed.slice(3).trim();
-  }
-  return trimmed;
-}
-
-function extractPhoneDigits(raw: string): string {
-  const cleaned = stripPlus55(raw);
-  const digits = cleaned.replace(/\D/g, "");
-  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
-    return digits.slice(2);
-  }
-  return digits;
-}
 
 export default function CustomerLookupPage() {
   const { isGestor } = useAuth();
@@ -82,7 +49,7 @@ export default function CustomerLookupPage() {
       const cleaned = stripPlus55(keyToSearch);
       if (!cleaned || cleaned.length < 3) return;
 
-      const digits = extractPhoneDigits(cleaned);
+      const digits = extractCleanPhoneDigits(cleaned);
       if (!force && digits.length >= 10 && lastAutoPhoneRef.current === digits) {
         return;
       }
@@ -114,7 +81,7 @@ export default function CustomerLookupPage() {
 
   // Auto-lookup sempre que digitar/colar um telefone completo (10 ou 11 dígitos)
   useEffect(() => {
-    const digits = extractPhoneDigits(searchKey);
+    const digits = extractCleanPhoneDigits(searchKey);
     if (
       (keyType === "TELEFONE" || keyType === "AUTO") &&
       digits.length >= 10 &&
@@ -147,12 +114,8 @@ export default function CustomerLookupPage() {
       <div className="space-y-6 pb-16">
         <div>
           <h1 className="text-lg font-bold text-zinc-100">
-            Busca de Clientes (POST Webhook Directus)
+            Busca de Clientes
           </h1>
-          <p className="text-xs text-zinc-400 mt-1">
-            Digite o telefone para puxar automaticamente via POST Webhook os 13
-            campos de Dados do cliente.
-          </p>
         </div>
 
         {/* Search Card */}
@@ -206,24 +169,6 @@ export default function CustomerLookupPage() {
               <span>{isLoading ? "Puxando..." : "Puxar Dados (POST)"}</span>
             </button>
           </form>
-
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <span className="text-xs text-zinc-500">Testar rápido:</span>
-            {DEMO_KEYS.map((item) => (
-              <button
-                key={item.label}
-                type="button"
-                onClick={() => {
-                  setKeyType(item.type);
-                  setSearchKey(item.value);
-                  performLookup(item.value, item.type, true);
-                }}
-                className="px-2.5 py-1 rounded-md bg-[#121215] hover:bg-zinc-900 text-xs font-mono text-zinc-300 border border-zinc-800 transition-colors"
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
         </div>
 
         {error && (

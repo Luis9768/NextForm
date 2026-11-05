@@ -2,15 +2,15 @@
 
 import React, { Suspense } from "react";
 import { AppShell } from "@/components/layout/AppShell";
-import { DirectusStudioWorkspace } from "@/app/studio/page";
+import { DirectusStudioWorkspace } from "@/components/studio/DirectusStudioWorkspace";
 
-export default function DirectusFlowsPage() {
+export default function FlowsAutomationPage() {
   return (
     <AppShell>
       <Suspense
         fallback={
           <div className="p-8 text-xs text-zinc-500">
-            Carregando Directus Flows...
+            Carregando Fluxos & Automação...
           </div>
         }
       >

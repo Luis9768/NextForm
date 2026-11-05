@@ -50,21 +50,10 @@ export default function DirectusBenchmarksPage() {
       <div className="space-y-6 pb-16">
         {/* Header */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-zinc-200 dark:border-zinc-800/80">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-xs font-mono text-zinc-500">
-              <span>NEXFORM</span>
-              <span>/</span>
-              <span className="text-zinc-300">Indicadores & Benchmarks</span>
-            </div>
-            <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2 mt-0.5">
-              <Gauge className="h-5 w-5 text-zinc-400 shrink-0" />
-              <span>Benchmarks de Qualidade, Pessoas & Performance</span>
-            </h1>
-            <p className="text-xs text-zinc-500 mt-0.5 leading-relaxed">
-              Comparativo da equipe contra a meta corporativa (80%), aderência
-              por etapa da ligação e telemetria de latência do sistema.
-            </p>
-          </div>
+          <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            <Gauge className="h-5 w-5 text-zinc-400 shrink-0" />
+            <span>Benchmarks</span>
+          </h1>
 
           <button
             type="button"
@@ -238,90 +227,95 @@ export default function DirectusBenchmarksPage() {
               </div>
             </div>
 
-            {/* Analyst Benchmark Gap Table */}
+            {/* Analyst Benchmark Gap List (Fluida, Sem Corte) */}
             <div className="rounded-xl border border-zinc-800/90 bg-[#101013] overflow-hidden">
-              <div className="p-5 sm:p-6 border-b border-zinc-800 flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-semibold text-zinc-100">
-                    Benchmark Individual por Analista (Gap vs Meta 80%)
-                  </h2>
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    Comparação direta de cada analista contra o índice de
-                    referência da operação
-                  </p>
-                </div>
+              <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
+                <h2 className="text-base font-semibold text-zinc-100">
+                  Benchmark Individual por Analista (Meta 80%)
+                </h2>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-zinc-800 font-mono text-zinc-500 whitespace-nowrap">
-                      <th className="py-3.5 px-6">Analista</th>
-                      <th className="py-3.5 px-4">Setor</th>
-                      <th className="py-3.5 px-4 text-center">Avaliações</th>
-                      <th className="py-3.5 px-4 text-center">
-                        Conformidade (Sem Fatal)
-                      </th>
-                      <th className="py-3.5 px-4 text-right">Nota Média</th>
-                      <th className="py-3.5 px-4 text-right">
-                        Delta vs Benchmark (80%)
-                      </th>
-                      <th className="py-3.5 px-6 text-right">Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800/80">
-                    {bench.analystBenchmarks.map((a) => {
-                      const delta = Number(a.deltaFromTarget);
-                      const isPositive = delta >= 0;
-                      return (
-                        <tr
-                          key={a.analystId}
-                          className="hover:bg-zinc-900/40 transition-colors whitespace-nowrap"
+              <div className="hidden lg:grid lg:grid-cols-[minmax(0,1.5fr)_140px_100px_110px_80px_100px_100px] lg:items-center lg:gap-3 px-5 py-2.5 bg-[#09090b] border-b border-zinc-800/80 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+                <span>Operador</span>
+                <span>Setor</span>
+                <span className="text-right">Avaliadas</span>
+                <span className="text-right">Conformidade</span>
+                <span className="text-right">Média</span>
+                <span className="text-center">Delta (80%)</span>
+                <span className="text-right">Ação</span>
+              </div>
+
+              <div className="divide-y divide-zinc-800/80">
+                {bench.analystBenchmarks.map((a) => {
+                  const delta = Number(a.deltaFromTarget);
+                  const isPositive = delta >= 0;
+                  const initials = (a.analystName || "OP")
+                    .split(" ")
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .map((w) => w[0]?.toUpperCase())
+                    .join("");
+
+                  return (
+                    <div
+                      key={a.analystId}
+                      className="p-4 sm:px-5 sm:py-3 hover:bg-zinc-900/40 transition-colors flex flex-col lg:grid lg:grid-cols-[minmax(0,1.5fr)_140px_100px_110px_80px_100px_100px] lg:items-center gap-3"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="h-8 w-8 rounded-lg bg-[#15151a] border border-zinc-800 flex items-center justify-center text-[11px] font-mono font-semibold text-zinc-200 shrink-0">
+                          {initials}
+                        </div>
+                        <span className="text-xs font-semibold text-zinc-100 truncate">
+                          {a.analystName}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="px-2 py-0.5 rounded bg-[#141418] border border-zinc-800 text-[10px] font-mono text-zinc-300">
+                          {a.department}
+                        </span>
+                      </div>
+
+                      <div className="text-right font-mono text-xs tabular-nums text-zinc-300">
+                        {a.evaluatedCalls}
+                      </div>
+
+                      <div className="text-right font-mono text-xs tabular-nums text-zinc-300">
+                        {Number(a.complianceRate).toFixed(0)}%
+                      </div>
+
+                      <div className="text-right font-mono font-bold text-sm tabular-nums text-zinc-100">
+                        {Number(a.averageScore).toFixed(1)}%
+                      </div>
+
+                      <div className="flex justify-center">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono font-semibold tabular-nums ${
+                            isPositive
+                              ? "bg-zinc-100 text-zinc-950"
+                              : "bg-zinc-900 text-zinc-400 border border-zinc-800"
+                          }`}
                         >
-                          <td className="py-3.5 px-6 font-semibold text-zinc-100">
-                            {a.analystName}
-                          </td>
-                          <td className="py-3.5 px-4 text-zinc-400">
-                            {a.department}
-                          </td>
-                          <td className="py-3.5 px-4 text-center font-mono text-zinc-300">
-                            {a.evaluatedCalls}
-                          </td>
-                          <td className="py-3.5 px-4 text-center font-mono text-zinc-300">
-                            {Number(a.complianceRate).toFixed(1)}%
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-mono font-bold text-zinc-100">
-                            {Number(a.averageScore).toFixed(1)}%
-                          </td>
-                          <td className="py-3.5 px-4 text-right font-mono">
-                            <span
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap ${
-                                isPositive
-                                  ? "bg-zinc-100 text-zinc-950"
-                                  : "bg-zinc-900 text-zinc-400 border border-zinc-800"
-                              }`}
-                            >
-                              {isPositive ? (
-                                <TrendingUp className="h-3 w-3 shrink-0" />
-                              ) : (
-                                <TrendingDown className="h-3 w-3 shrink-0" />
-                              )}
-                              {isPositive ? `+${delta}` : delta}%
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-6 text-right">
-                            <Link
-                              href={`/analysts/${a.analystId}`}
-                              className="inline-flex items-center justify-center h-8 px-3 rounded-lg bg-zinc-100 text-zinc-950 font-semibold text-xs hover:bg-zinc-200 transition-colors whitespace-nowrap shrink-0"
-                            >
-                              Avaliar Analista
-                            </Link>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          {isPositive ? (
+                            <TrendingUp className="h-3 w-3 shrink-0" />
+                          ) : (
+                            <TrendingDown className="h-3 w-3 shrink-0" />
+                          )}
+                          {isPositive ? `+${delta}` : delta}%
+                        </span>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <Link
+                          href={`/analysts/${a.analystId}`}
+                          className="inline-flex items-center justify-center h-8 px-3 rounded-md bg-zinc-100 text-zinc-950 font-semibold text-xs hover:bg-zinc-200 transition-colors shrink-0"
+                        >
+                          Avaliar
+                        </Link>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </>

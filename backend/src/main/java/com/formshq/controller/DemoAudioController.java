@@ -39,6 +39,16 @@ public class DemoAudioController {
         return toRangeResponse(slice);
     }
 
+    @GetMapping("/directus/{fileId:.+}")
+    @Operation(summary = "Faz proxy e streaming com HTTP Range do arquivo de áudio real armazenado no Directus (/assets/{fileId})")
+    public ResponseEntity<byte[]> streamDirectusAsset(
+            @PathVariable String fileId,
+            @RequestHeader(value = HttpHeaders.RANGE, required = false) String rangeHeader
+    ) {
+        AudioStreamSlice slice = demoAudioService.resolveDirectusAssetAudioSlice(fileId, rangeHeader);
+        return toRangeResponse(slice);
+    }
+
     private ResponseEntity<byte[]> toRangeResponse(AudioStreamSlice slice) {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.CONTENT_TYPE, slice.contentType());

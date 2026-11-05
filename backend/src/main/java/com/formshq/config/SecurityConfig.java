@@ -95,6 +95,7 @@ public class SecurityConfig {
                         ).permitAll()
                         .requestMatchers("/api/v1/integrations/n8n/**").hasAuthority("ROLE_N8N_INTEGRATION")
                         .requestMatchers(
+                                "/api/v1/integrations/directus/**",
                                 "/api/v1/studio/**",
                                 "/api/v1/users/**",
                                 "/api/v1/sectors/**",

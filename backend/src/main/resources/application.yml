@@ -36,6 +36,19 @@ app:
       secret: ${JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970}
       expiration-ms: ${JWT_EXPIRATION_MS:86400000}
     n8n-api-key: ${N8N_API_KEY:n8n-secret-api-key-2026}
+    first-access-password: ${APP_FIRST_ACCESS_PASSWORD:}
+    bootstrap-admin:
+      name: ${APP_BOOTSTRAP_ADMIN_NAME:Super Admin NextForm}
+      email: ${APP_BOOTSTRAP_ADMIN_EMAIL:}
+      password: ${APP_BOOTSTRAP_ADMIN_PASSWORD:}
+  storage:
+    r2:
+      endpoint: ${R2_ENDPOINT:}
+      bucket: ${R2_BUCKET:}
+      access-key-id: ${R2_ACCESS_KEY_ID:}
+      secret-access-key: ${R2_SECRET_ACCESS_KEY:}
+      region: ${R2_REGION:auto}
+      public-url: ${R2_PUBLIC_URL:}
   integrations:
     customer-api:
       base-url: ${EXTERNAL_CUSTOMER_API_URL:https://api.crm-externo.empresa.com/v1}

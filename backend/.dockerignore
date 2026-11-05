@@ -1,9 +1,9 @@
 target/
-.mvn/
-!.mvn/wrapper/
-*.iml
+data/
+.env
+.env.*
+src/main/resources/application-local.yml
+*.log
+.git/
 .idea/
 .vscode/
-data/
-*.log
-.DS_Store

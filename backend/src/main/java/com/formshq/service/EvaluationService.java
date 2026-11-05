@@ -13,6 +13,7 @@ import com.formshq.repository.CallRecordRepository;
 import com.formshq.repository.EvaluationFormTemplateRepository;
 import com.formshq.repository.EvaluationRepository;
 import com.formshq.repository.UserRepository;
+import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +25,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +41,7 @@ public class EvaluationService {
     private final CallRecordRepository callRecordRepository;
     private final EvaluationFormTemplateRepository formTemplateRepository;
     private final UserRepository userRepository;
+    private final SectorScopePolicy sectorScopePolicy;
 
     @Transactional
     public EvaluationResponse submitEvaluation(CreateEvaluationRequest request, UserPrincipal evaluatorPrincipal) {
@@ -62,6 +63,9 @@ public class EvaluationService {
             throw new BusinessRuleException("O formulário selecionado não possui itens configurados.");
         }
 
+        String analystSector = callRecord.getAnalyst() != null ? callRecord.getAnalyst().getDepartment() : null;
+        sectorScopePolicy.assertCallerCanAccessSector(evaluatorPrincipal, analystSector, formTemplate.getSector());
+
         User evaluator = userRepository.findById(evaluatorPrincipal.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Avaliador não encontrado."));
 
@@ -81,8 +85,8 @@ public class EvaluationService {
                 .evaluator(evaluator)
                 .analyst(callRecord.getAnalyst())
                 .analystSectorSnapshot(
-                        callRecord.getAnalyst().getDepartment() != null
-                                ? callRecord.getAnalyst().getDepartment()
+                        analystSector != null
+                                ? analystSector
                                 : (formTemplate.getSector() != null ? formTemplate.getSector() : "Geral")
                 )
                 .formTemplate(formTemplate)
@@ -204,25 +208,16 @@ public class EvaluationService {
             evaluations = evaluationRepository.findAllByOrderByEvaluatedAtDesc();
         }
 
-        // Restrição de setores para o perfil Gestor (Admin vê todos)
         if (!currentUser.isAdmin() && currentUser.isGestor()) {
-            User manager = userRepository.findById(currentUser.getId()).orElse(null);
-            if (manager != null && manager.getAllowedSectors() != null && !manager.getAllowedSectors().isBlank()) {
-                Set<String> allowed = Arrays.stream(manager.getAllowedSectors().split(","))
-                        .map(s -> s.trim().toLowerCase())
-                        .filter(s -> !s.isEmpty())
-                        .collect(Collectors.toSet());
-                if (!allowed.isEmpty()) {
-                    evaluations = evaluations.stream()
-                            .filter(e -> {
-                                String evalSector = resolveEvaluationSector(e).toLowerCase();
-                                String currentDept = e.getAnalyst() != null && e.getAnalyst().getDepartment() != null
-                                        ? e.getAnalyst().getDepartment().trim().toLowerCase()
-                                        : "";
-                                return allowed.contains(evalSector) || allowed.contains(currentDept);
-                            })
-                            .toList();
-                }
+            Set<String> allowed = sectorScopePolicy.resolveAllowedSectorsForCaller(currentUser);
+            if (!allowed.isEmpty()) {
+                evaluations = evaluations.stream()
+                        .filter(e -> {
+                            String evalSector = sectorScopePolicy.resolveEvaluationSector(e);
+                            String currentDept = e.getAnalyst() != null ? e.getAnalyst().getDepartment() : null;
+                            return sectorScopePolicy.isSectorAllowed(allowed, evalSector, currentDept);
+                        })
+                        .toList();
             }
         }
 
@@ -247,7 +242,7 @@ public class EvaluationService {
         if (sectorFilter != null && !sectorFilter.isBlank()) {
             String sec = sectorFilter.trim().toLowerCase();
             evaluations = evaluations.stream()
-                    .filter(e -> resolveEvaluationSector(e).equalsIgnoreCase(sec)
+                    .filter(e -> sectorScopePolicy.resolveEvaluationSector(e).equalsIgnoreCase(sec)
                             || (e.getAnalyst() != null && e.getAnalyst().getDepartment() != null
                             && e.getAnalyst().getDepartment().trim().equalsIgnoreCase(sec)))
                     .toList();
@@ -270,16 +265,6 @@ public class EvaluationService {
                 .toList();
     }
 
-    private String resolveEvaluationSector(Evaluation e) {
-        if (e.getAnalystSectorSnapshot() != null && !e.getAnalystSectorSnapshot().isBlank()) {
-            return e.getAnalystSectorSnapshot().trim();
-        }
-        if (e.getAnalyst() != null && e.getAnalyst().getDepartment() != null) {
-            return e.getAnalyst().getDepartment().trim();
-        }
-        return "Geral";
-    }
-
     @Transactional(readOnly = true)
     public EvaluationResponse getEvaluationById(UUID id, UserPrincipal currentUser) {
         Evaluation evaluation = evaluationRepository.findWithDetailsById(id)
@@ -288,6 +273,9 @@ public class EvaluationService {
         if (currentUser.isAnalista() && !evaluation.getAnalyst().getId().equals(currentUser.getId())) {
             throw new AccessDeniedException("Analistas só podem visualizar suas próprias avaliações.");
         }
+        String evalSector = sectorScopePolicy.resolveEvaluationSector(evaluation);
+        String analystDept = evaluation.getAnalyst() != null ? evaluation.getAnalyst().getDepartment() : null;
+        sectorScopePolicy.assertCallerCanAccessSector(currentUser, evalSector, analystDept);
 
         return EvaluationResponse.fromEntity(evaluation);
     }
@@ -300,6 +288,9 @@ public class EvaluationService {
         if (currentUser.isAnalista() && !evaluation.getAnalyst().getId().equals(currentUser.getId())) {
             throw new AccessDeniedException("Analistas só podem visualizar suas próprias avaliações.");
         }
+        String evalSector = sectorScopePolicy.resolveEvaluationSector(evaluation);
+        String analystDept = evaluation.getAnalyst() != null ? evaluation.getAnalyst().getDepartment() : null;
+        sectorScopePolicy.assertCallerCanAccessSector(currentUser, evalSector, analystDept);
 
         return EvaluationResponse.fromEntity(evaluation);
     }

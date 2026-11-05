@@ -147,21 +147,9 @@ export default function N8nIntegrationPage() {
       <div className="space-y-6 pb-16">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-mono text-zinc-500">
-              <span>NEXFORM</span>
-              <span>/</span>
-              <span className="text-zinc-300">Webhooks & Integrações</span>
-            </div>
-            <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 mt-0.5">
-              Central de Webhooks & Integrações (n8n / RH / CRM)
-            </h1>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Gerencie Webhooks de saída disparados por avaliações e teste a
-              ingestão de ligações do agente n8n via{" "}
-              <code className="font-mono">X-API-KEY</code>.
-            </p>
-          </div>
+          <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
+            Webhooks & Integrações
+          </h1>
 
           <div className="inline-flex items-center gap-1 rounded-lg bg-[#09090b] p-1 border border-zinc-800 self-start">
             <button

@@ -35,29 +35,18 @@ import {
   formsApi,
   usersApi,
 } from "@/lib/api";
-import { formatDuration, formatPhoneMask } from "@/lib/utils";
+import {
+  calculateLiveEvaluationScore,
+  extractCleanPhoneDigits,
+  formatDuration,
+  formatPhoneMask,
+} from "@/lib/utils";
 import { CallRecord, CustomerInfo, FormTemplate } from "@/types";
 
 type FlowStep = 1 | 2 | 3;
 
 const DIRECTUS_WEBHOOK_URL =
   process.env.NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL || "";
-
-const QUICK_PHONES = [
-  "(11) 99999-9999",
-  "(11) 98811-2233",
-  "(11) 97744-5566",
-  "(21) 99988-7766",
-];
-
-function extractCleanPhoneDigits(raw: string): string {
-  const trimmed = (raw || "").trim().replace(/^\+55\s*/, "");
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
-    return digits.slice(2);
-  }
-  return digits;
-}
 
 export default function AnalystEvaluationFlowPage() {
   const params = useParams<{ id: string }>();
@@ -71,8 +60,15 @@ export default function AnalystEvaluationFlowPage() {
   const [step, setStep] = useState<FlowStep>(1);
   const [flowError, setFlowError] = useState<string | null>(null);
 
-  // Etapa 1: Telefone_Portabilidade + 13 Dados puxados automaticamente via POST Webhook
+  // Etapa 1: Telefone_Portabilidade + Ticket / Datas (SAC & Retenção) + 13 Dados via POST Webhook
   const [phoneInput, setPhoneInput] = useState("");
+  const [ticketInput, setTicketInput] = useState("");
+  const [dataMonitoriaInput, setDataMonitoriaInput] = useState(
+    new Date().toISOString().slice(0, 10)
+  );
+  const [dataAtendimentoInput, setDataAtendimentoInput] = useState(
+    new Date().toISOString().slice(0, 10)
+  );
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo | null>(null);
   const [webhookSource, setWebhookSource] = useState<string | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -93,10 +89,8 @@ export default function AnalystEvaluationFlowPage() {
   const [dueDateInput, setDueDateInput] = useState("");
   const [earlyPortabilityInput, setEarlyPortabilityInput] = useState("");
 
-  // Etapa 2: Audio_Ligacao + Audio_Ligacao_Retorno (Monitoria_Tim_Aquisicao)
-  const [campaignInput, setCampaignInput] = useState(
-    "Monitoria_Tim_Aquisicao"
-  );
+  // Etapa 2: Audio_Ligacao / Audio_Chamada + Audio_Ligacao_Retorno
+  const [campaignInput, setCampaignInput] = useState("Monitoria_Qualidade");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
   const [detectedDuration, setDetectedDuration] = useState<number>(185);
@@ -105,13 +99,23 @@ export default function AnalystEvaluationFlowPage() {
   const [returnDuration, setReturnDuration] = useState<number>(120);
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
 
-  // Etapa 3: Avaliar (Formulário de Portabilidade + Falta_Grave + Motivo_falta_grave + Observacoes + Nota_Final)
+  // Cleanup de Blob URLs ao desmontar componente (evita vazamento de memória)
+  useEffect(() => {
+    return () => {
+      if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl);
+      if (returnPreviewUrl) URL.revokeObjectURL(returnPreviewUrl);
+    };
+  }, [localPreviewUrl, returnPreviewUrl]);
+
+  // Etapa 3: Avaliar (Portabilidade / SAC / Retenção)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [checkedMap, setCheckedMap] = useState<Record<string, boolean>>({});
   const [observationMap, setObservationMap] = useState<Record<string, string>>(
     {}
   );
   const [generalFeedback, setGeneralFeedback] = useState("");
+  const [pontosFortes, setPontosFortes] = useState("");
+  const [melhorias, setMelhorias] = useState("");
   const [motivoFaltaGrave, setMotivoFaltaGrave] = useState("N/A");
   const [expandedNoteItemId, setExpandedNoteItemId] = useState<string | null>(
     null
@@ -138,23 +142,45 @@ export default function AnalystEvaluationFlowPage() {
       return;
     }
 
-    // Prioriza o Formulário de Portabilidade (Monitoria TIM Aquisição - Portabilidade)
-    const portabilidadeMatch = existingTemplates.find(
-      (t) =>
-        t.name.toLowerCase().includes("portabilidade") ||
-        t.name.toLowerCase().includes("tim aquisição") ||
-        t.name.toLowerCase().includes("tim aquisicao")
-    );
+    const deptLower = (analyst?.department || "").toLowerCase();
+    let matched: FormTemplate | undefined;
 
-    const sectorMatch = analyst?.department
-      ? existingTemplates.find(
-          (t) =>
-            t.sector &&
-            t.sector.toLowerCase() === analyst.department.toLowerCase()
-        )
-      : null;
+    if (deptLower.includes("sac") || deptLower.includes("suporte")) {
+      matched = existingTemplates.find((t) =>
+        t.name.toLowerCase().includes("monitoria sac")
+      );
+    } else if (
+      deptLower.includes("retenção") ||
+      deptLower.includes("retencao") ||
+      deptLower.includes("cobrança")
+    ) {
+      matched = existingTemplates.find(
+        (t) =>
+          t.name.toLowerCase().includes("monitoria retenção") ||
+          t.name.toLowerCase().includes("monitoria retencao")
+      );
+    } else if (
+      deptLower.includes("aquisição") ||
+      deptLower.includes("aquisicao")
+    ) {
+      matched = existingTemplates.find((t) =>
+        t.name.toLowerCase().includes("portabilidade")
+      );
+    }
 
-    const chosen = portabilidadeMatch || sectorMatch || existingTemplates[0];
+    const officialFallback =
+      existingTemplates.find((t) =>
+        t.name.toLowerCase().includes("portabilidade")
+      ) ||
+      existingTemplates.find((t) =>
+        t.name.toLowerCase().includes("monitoria sac")
+      ) ||
+      existingTemplates.find((t) =>
+        t.name.toLowerCase().includes("monitoria retenção")
+      ) ||
+      existingTemplates[0];
+
+    const chosen = matched || officialFallback;
     if (chosen) {
       handleSelectTemplate(chosen);
     }
@@ -173,7 +199,6 @@ export default function AnalystEvaluationFlowPage() {
     setSelectedTemplateId(tpl.id);
     const initialChecks: Record<string, boolean> = {};
     tpl.items.forEach((item) => {
-      // No formulário de Portabilidade, os itens padrão iniciam marcados (100 pts) para deduzir apenas as falhas encontradas, ou desmarcados nos itens fatais
       initialChecks[item.id] = !item.fatalError;
     });
     setCheckedMap(initialChecks);
@@ -244,27 +269,33 @@ export default function AnalystEvaluationFlowPage() {
     e.preventDefault();
     setFlowError(null);
     const cleanDigits = extractCleanPhoneDigits(phoneInput);
-    if (cleanDigits.length < 8) {
+    if (cleanDigits.length < 8 && !ticketInput.trim()) {
       setFlowError(
-        "Informe um Telefone_Portabilidade válido para puxar os dados."
+        "Informe um Telefone válido (ou número de Ticket) para prosseguir."
       );
       return;
     }
 
     setLookupLoading(true);
     try {
+      const keyToUse =
+        cleanDigits.length >= 8
+          ? cleanDigits
+          : ticketInput.trim().replace(/^#/, "") || "11999999999";
+
       let currentCustomer = customerInfo;
       if (
         !currentCustomer ||
-        extractCleanPhoneDigits(currentCustomer.phone) !== cleanDigits
+        (cleanDigits.length >= 8 &&
+          extractCleanPhoneDigits(currentCustomer.phone) !== cleanDigits)
       ) {
         const res = await customersApi.triggerWebhookLookup({
-          phone: cleanDigits,
-          searchKey: cleanDigits,
+          phone: keyToUse,
+          searchKey: keyToUse,
           cpf: customerCpfInput || undefined,
           motherName: customerMotherInput || undefined,
           name: customerNameInput || undefined,
-          keyType: "TELEFONE",
+          keyType: cleanDigits.length >= 8 ? "TELEFONE" : "PROPOSTA",
           analystId,
           webhookUrl: DIRECTUS_WEBHOOK_URL,
         });
@@ -279,7 +310,7 @@ export default function AnalystEvaluationFlowPage() {
         const updated = await customersApi.saveCustomerData(
           currentCustomer.id,
           {
-            phone: cleanDigits,
+            phone: cleanDigits || currentCustomer.phone,
             saleDate: saleDateInput.trim(),
             name: customerNameInput.trim(),
             document: customerCpfInput.trim(),
@@ -345,9 +376,15 @@ export default function AnalystEvaluationFlowPage() {
       return callsApi.uploadRecording({
         file: uploadedFile,
         analystId,
-        customerPhone: extractCleanPhoneDigits(phoneInput) || phoneInput,
+        customerPhone:
+          extractCleanPhoneDigits(phoneInput) ||
+          phoneInput ||
+          customerInfo?.phone ||
+          "11999999999",
         customerName: customerNameInput,
-        campaign: campaignInput,
+        campaign: ticketInput.trim()
+          ? `${campaignInput} • Ticket ${ticketInput.trim()}`
+          : campaignInput,
         durationSeconds: detectedDuration,
       });
     },
@@ -377,59 +414,36 @@ export default function AnalystEvaluationFlowPage() {
     [activeFormForCall]
   );
 
-  const liveScore = useMemo(() => {
-    const maxPossiblePoints = standardItems.reduce(
-      (acc, item) => acc + (item.points && item.points > 0 ? item.points : 1),
-      0
-    );
-    const obtainedPoints = standardItems
-      .filter((i) => checkedMap[i.id] === true)
-      .reduce(
-        (acc, item) => acc + (item.points && item.points > 0 ? item.points : 1),
-        0
-      );
-    const fatalTriggered = fatalItems.some((i) => checkedMap[i.id] === true);
-    const rawPercentage =
-      maxPossiblePoints > 0 ? (obtainedPoints / maxPossiblePoints) * 100 : 100;
-
-    if (fatalTriggered) {
-      return {
-        obtainedPoints,
-        maxPossiblePoints,
-        rawPercentage,
-        finalPercentage: 0,
-        fatalTriggered: true,
-        status: "ZERADO_ERRO_GRAVE" as const,
-      };
-    }
-
-    const passing = activeFormForCall
-      ? Number(activeFormForCall.passingScorePercentage)
-      : 80;
-
-    return {
-      obtainedPoints,
-      maxPossiblePoints,
-      rawPercentage,
-      finalPercentage: rawPercentage,
-      fatalTriggered: false,
-      status:
-        rawPercentage >= passing
-          ? ("APROVADO" as const)
-          : ("REPROVADO" as const),
-    };
-  }, [activeFormForCall, standardItems, fatalItems, checkedMap]);
+  const liveScore = useMemo(
+    () => calculateLiveEvaluationScore(activeFormForCall, checkedMap),
+    [activeFormForCall, checkedMap]
+  );
 
   const submitEvaluationMutation = useMutation({
     mutationFn: async () => {
       if (!selectedCall || !activeFormForCall) {
         throw new Error("Chamada ou formulário não selecionado.");
       }
-      const consolidatedFeedback = liveScore.fatalTriggered
-        ? `${generalFeedback.trim()}\n\n[Motivo_falta_grave]: ${
+      const parts: string[] = [];
+      if (ticketInput.trim()) {
+        parts.push(`[Ticket]: ${ticketInput.trim()}`);
+      }
+      if (generalFeedback.trim()) {
+        parts.push(generalFeedback.trim());
+      }
+      if (pontosFortes.trim()) {
+        parts.push(`[Pontos_fortes]: ${pontosFortes.trim()}`);
+      }
+      if (melhorias.trim()) {
+        parts.push(`[Melhorias]: ${melhorias.trim()}`);
+      }
+      if (liveScore.fatalTriggered) {
+        parts.push(
+          `[Motivo_falta_grave]: ${
             motivoFaltaGrave.trim() || "Falta Grave acionada"
-          }`.trim()
-        : generalFeedback.trim();
+          }`
+        );
+      }
 
       return evaluationsApi.submit({
         callRecordId: selectedCall.id,
@@ -442,7 +456,7 @@ export default function AnalystEvaluationFlowPage() {
               ? motivoFaltaGrave || observationMap[item.id] || undefined
               : observationMap[item.id] || undefined,
         })),
-        generalFeedback: consolidatedFeedback,
+        generalFeedback: parts.join("\n\n"),
       });
     },
     onSuccess: (createdEvaluation) => {
@@ -489,9 +503,11 @@ export default function AnalystEvaluationFlowPage() {
                   {analyst.department}
                 </span>
               )}
-              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
-                Monitoria_Tim_Aquisicao
-              </span>
+              {activeFormForCall && (
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
+                  {activeFormForCall.name}
+                </span>
+              )}
               {selectedCall && (
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
                   #{selectedCall.externalCallId}
@@ -544,7 +560,7 @@ export default function AnalystEvaluationFlowPage() {
 
         <AnimatePresence mode="wait">
           {/* ====================================================================
-              STEP 1: TELEFONE_PORTABILIDADE & 13 DADOS DO CLIENTE (AUTO-LOOKUP POST)
+              STEP 1: TELEFONE & 13 DADOS DO CLIENTE + METADADOS (TICKET / DATAS)
              ==================================================================== */}
           {step === 1 && (
             <motion.div
@@ -556,40 +572,28 @@ export default function AnalystEvaluationFlowPage() {
             >
               <form onSubmit={handleProceedToStep2} className="space-y-5">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-zinc-800/80">
-                  <div>
-                    <h2 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
-                      <User className="h-4 w-4 text-zinc-400" />
-                      <span>Dados • Monitoria TIM Aquisição (Portabilidade)</span>
-                    </h2>
-                    <p className="text-[11px] text-zinc-400 mt-0.5">
-                      Informe o{" "}
-                      <span className="font-mono text-zinc-300">
-                        Telefone_Portabilidade
-                      </span>{" "}
-                      para puxar automaticamente os 13 campos via{" "}
-                      <span className="font-mono text-zinc-300">
-                        POST /webhook/buscar-dados-directus
-                      </span>
-                    </p>
-                  </div>
+                  <h2 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                    <User className="h-4 w-4 text-zinc-400" />
+                    <span>Dados do Cliente</span>
+                  </h2>
 
                   {lookupLoading ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300">
                       <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
-                      <span>Puxando dados...</span>
+                      <span>Consultando...</span>
                     </span>
                   ) : webhookSource ? (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
                       <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                      <span>{webhookSource}</span>
+                      <span>Sincronizado</span>
                     </span>
                   ) : null}
                 </div>
 
-                {/* Campo Principal: Telefone_Portabilidade */}
+                {/* Campo Principal: Telefone */}
                 <div className="space-y-2 pb-2 border-b border-zinc-800/60">
                   <label className="block text-xs font-medium text-zinc-300">
-                    Telefone_Portabilidade (puxa os dados sozinho ao digitar)
+                    Telefone
                   </label>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <div className="relative flex-1">
@@ -618,24 +622,43 @@ export default function AnalystEvaluationFlowPage() {
                       <span>Puxar Dados</span>
                     </button>
                   </div>
+                </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                    <span className="text-[11px] text-zinc-500 mr-1">
-                      Telefones da Monitoria (JSON):
-                    </span>
-                    {QUICK_PHONES.map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => {
-                          setPhoneInput(p);
-                          pullContactFromWebhook(p, true);
-                        }}
-                        className="px-2.5 py-1 rounded-md border border-zinc-800 bg-[#121215] hover:border-zinc-600 text-[11px] font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
-                      >
-                        {p}
-                      </button>
-                    ))}
+                {/* Campos de Ticket e Datas (Monitoria_SAC & Monitoria_Retencao) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pb-2 border-b border-zinc-800/60">
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-300 mb-1">
+                      Ticket (SAC / Retenção)
+                    </label>
+                    <input
+                      type="text"
+                      value={ticketInput}
+                      onChange={(e) => setTicketInput(e.target.value)}
+                      placeholder="Ex: #14648071"
+                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-300 mb-1">
+                      Data_monitoria
+                    </label>
+                    <input
+                      type="date"
+                      value={dataMonitoriaInput}
+                      onChange={(e) => setDataMonitoriaInput(e.target.value)}
+                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-300 mb-1">
+                      Data_do_Atendimento
+                    </label>
+                    <input
+                      type="date"
+                      value={dataAtendimentoInput}
+                      onChange={(e) => setDataAtendimentoInput(e.target.value)}
+                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                    />
                   </div>
                 </div>
 
@@ -842,10 +865,12 @@ export default function AnalystEvaluationFlowPage() {
               <div className="p-3.5 rounded-xl border border-zinc-800 bg-[#121215] grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
                 <div>
                   <span className="text-[10px] font-mono text-zinc-500 block">
-                    Telefone_Portabilidade
+                    Telefone / Ticket
                   </span>
                   <span className="font-mono text-zinc-100 font-medium truncate block">
-                    {extractCleanPhoneDigits(phoneInput) || phoneInput}
+                    {extractCleanPhoneDigits(phoneInput) ||
+                      ticketInput ||
+                      phoneInput}
                   </span>
                 </div>
                 <div>
@@ -903,7 +928,7 @@ export default function AnalystEvaluationFlowPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <span className="block text-xs font-mono text-zinc-300">
-                    Audio_Ligacao (Gravação Principal) *
+                    Audio_Ligacao / Audio_Chamada (Principal) *
                   </span>
                   <div
                     onDragOver={(e) => e.preventDefault()}
@@ -1061,7 +1086,7 @@ export default function AnalystEvaluationFlowPage() {
           )}
 
           {/* ====================================================================
-              STEP 3: FORMULÁRIO DE PORTABILIDADE (Monitoria_Tim_Aquisicao)
+              STEP 3: FORMULÁRIO DE MONITORIA (PORTABILIDADE / SAC / RETENÇÃO)
              ==================================================================== */}
           {step === 3 && selectedCall && activeFormForCall && (
             <motion.div
@@ -1073,12 +1098,19 @@ export default function AnalystEvaluationFlowPage() {
             >
               {/* Card com os 13 Dados do Cliente para Conferência na Auditoria */}
               <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-zinc-200 uppercase font-mono">
-                    Dados • Telefone_Portabilidade:{" "}
-                    {extractCleanPhoneDigits(phoneInput) ||
-                      selectedCall.customerIdentifier}
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-zinc-200 uppercase font-mono">
+                      Dados • Telefone:{" "}
+                      {extractCleanPhoneDigits(phoneInput) ||
+                        selectedCall.customerIdentifier}
+                    </span>
+                    {ticketInput && (
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
+                        Ticket: {ticketInput}
+                      </span>
+                    )}
+                  </div>
                   {webhookSource && (
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-300 border border-emerald-800/70">
                       {webhookSource}
@@ -1194,7 +1226,7 @@ export default function AnalystEvaluationFlowPage() {
                 </div>
               </div>
 
-              {/* Barra Unificada: Seletor de Formulário + Player de Audio_Ligacao (& Audio_Ligacao_Retorno) */}
+              {/* Barra Unificada: Seletor de Formulário (Portabilidade / SAC / Retenção) + Player de Áudio */}
               <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3.5">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   {/* Seletor de Formulário Compacto */}
@@ -1213,7 +1245,8 @@ export default function AnalystEvaluationFlowPage() {
                     >
                       {existingTemplates.map((tpl) => (
                         <option key={tpl.id} value={tpl.id}>
-                          {tpl.name} ({tpl.sector || "Geral"})
+                          {tpl.name} ({tpl.sector || "Geral"} •{" "}
+                          {tpl.maxPossiblePoints} pts)
                         </option>
                       ))}
                     </select>
@@ -1263,13 +1296,14 @@ export default function AnalystEvaluationFlowPage() {
                 )}
               </div>
 
-              {/* Grid Principal: Critérios de Portabilidade à Esquerda + Resumo Nota_Final à Direita */}
+              {/* Grid Principal: Critérios à Esquerda + Resumo Nota_Final à Direita */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
                 <div className="lg:col-span-8 space-y-5">
                   <div className="space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-mono uppercase tracking-wider text-zinc-400">
-                        Critérios de Portabilidade ({standardItems.length})
+                        Critérios ({standardItems.length}) •{" "}
+                        {activeFormForCall.name}
                       </span>
                       <button
                         type="button"
@@ -1335,8 +1369,8 @@ export default function AnalystEvaluationFlowPage() {
                                   }`}
                                 >
                                   {isChecked
-                                    ? `+${item.points || 1} pts`
-                                    : `-${item.points || 1} pts`}
+                                    ? `${item.points || 1} pts`
+                                    : `0 / ${item.points || 1} pts`}
                                 </span>
                                 <button
                                   type="button"
@@ -1362,7 +1396,7 @@ export default function AnalystEvaluationFlowPage() {
                                     [item.id]: e.target.value,
                                   }))
                                 }
-                                placeholder="Ex: [04:10] Não informou franquia de 550 minutos..."
+                                placeholder="Observação específica deste critério..."
                                 className="w-full h-8 px-2.5 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-200 focus:outline-none focus:border-zinc-600"
                               />
                             )}
@@ -1372,7 +1406,7 @@ export default function AnalystEvaluationFlowPage() {
                     </div>
                   </div>
 
-                  {/* Falta_Grave & Motivo_falta_grave */}
+                  {/* Falta_Grave / falta_grave & Motivo_falta_grave */}
                   {fatalItems.length > 0 && (
                     <div className="space-y-2.5 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
                       <div className="flex items-center justify-between">
@@ -1381,7 +1415,7 @@ export default function AnalystEvaluationFlowPage() {
                           <span>Falta_Grave (Zera Nota_Final = 0)</span>
                         </span>
                         <span className="text-[11px] font-mono text-zinc-400">
-                          Falta_Grave:{" "}
+                          falta_grave:{" "}
                           <strong
                             className={
                               liveScore.fatalTriggered
@@ -1459,26 +1493,26 @@ export default function AnalystEvaluationFlowPage() {
                     </div>
                   )}
 
-                  {/* Observacoes (com atalhos de minutagem [MM:SS] do JSON) */}
-                  <div className="space-y-2 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
+                  {/* Observacoes / Breve_resumo_do_atendimento + Pontos_fortes + Melhorias */}
+                  <div className="space-y-3 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="block text-xs font-mono uppercase tracking-wider text-zinc-300">
-                        Observacoes
+                        Observacoes / Breve_resumo_do_atendimento
                       </label>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {[
+                          "Possui vício de linguagem (né / tá / aí). ",
+                          "Não menciona os canais digitais da administradora. ",
+                          "Não solicita confirmação de CPF/e-mail/telefone secundário. ",
                           "[01:00] Não informou franquia de 550 minutos; ",
-                          "[02:30] Uso de diminutivo/gerundismo; ",
                           "[04:20] Não ofertou opção de eSIM (*#06#); ",
-                          "[06:30] Não informou exceção de voz/vídeo no WhatsApp; ",
-                          "[10:00] Não instruiu SMS 7678 (TIM); ",
                         ].map((snippet) => (
                           <button
                             key={snippet}
                             type="button"
                             onClick={() =>
                               setGeneralFeedback((prev) =>
-                                prev ? `${prev}${snippet}` : snippet
+                                prev ? `${prev}\n${snippet}` : snippet
                               )
                             }
                             className="px-2 py-0.5 rounded border border-zinc-800 bg-[#121215] hover:border-zinc-600 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
@@ -1493,9 +1527,36 @@ export default function AnalystEvaluationFlowPage() {
                       rows={5}
                       value={generalFeedback}
                       onChange={(e) => setGeneralFeedback(e.target.value)}
-                      placeholder="[04:10] Uso de gerundismo; [10:10] Informou 50 minutos ao invés de 550 minutos do plano...&#10;&#10;Resumo da monitoria de portabilidade..."
+                      placeholder="Breve resumo do atendimento / Observações da monitoria..."
                       className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
                     />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <label className="block text-xs font-mono text-zinc-400 mb-1">
+                          Pontos_fortes (Opcional)
+                        </label>
+                        <input
+                          type="text"
+                          value={pontosFortes}
+                          onChange={(e) => setPontosFortes(e.target.value)}
+                          placeholder="Pontos fortes identificados..."
+                          className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-mono text-zinc-400 mb-1">
+                          Melhorias (Opcional)
+                        </label>
+                        <input
+                          type="text"
+                          value={melhorias}
+                          onChange={(e) => setMelhorias(e.target.value)}
+                          placeholder="Oportunidades de melhoria..."
+                          className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1517,7 +1578,7 @@ export default function AnalystEvaluationFlowPage() {
                   {liveScore.fatalTriggered && (
                     <div className="p-3 rounded-lg bg-red-950/60 border border-red-800 text-red-200 text-xs flex items-center gap-2">
                       <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
-                      <span>Falta_Grave = true (Nota Zerada)</span>
+                      <span>falta_grave = true (Nota Zerada)</span>
                     </div>
                   )}
 
@@ -1533,22 +1594,26 @@ export default function AnalystEvaluationFlowPage() {
 
                   <div className="p-3 rounded-lg border border-zinc-800/80 bg-[#121215] space-y-1.5 text-[11px] font-mono">
                     <div className="flex justify-between">
-                      <span className="text-zinc-500">
-                        Telefone_Portabilidade:
+                      <span className="text-zinc-500">Formulário:</span>
+                      <span className="text-zinc-200 truncate max-w-[160px]">
+                        {activeFormForCall.name}
                       </span>
+                    </div>
+                    {ticketInput && (
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Ticket:</span>
+                        <span className="text-zinc-200">{ticketInput}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-zinc-500">Telefone:</span>
                       <span className="text-zinc-200">
                         {extractCleanPhoneDigits(phoneInput) ||
                           selectedCall.customerIdentifier}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-zinc-500">Data_da_venda:</span>
-                      <span className="text-zinc-200">
-                        {saleDateInput || "-"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-500">Falta_Grave:</span>
+                      <span className="text-zinc-500">falta_grave:</span>
                       <span
                         className={
                           liveScore.fatalTriggered

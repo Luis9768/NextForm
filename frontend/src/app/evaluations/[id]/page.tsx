@@ -63,6 +63,14 @@ export default function EvaluationDetailPage() {
   const badge = getEvaluationStatusBadge(evaluation.status);
   const standardItems = evaluation.items.filter((i) => !i.fatalError);
   const fatalItems = evaluation.items.filter((i) => i.fatalError);
+  const customer = evaluation.callRecord.customer;
+  const transcricao =
+    typeof evaluation.callRecord.metadata?.transcricao === "string"
+      ? evaluation.callRecord.metadata.transcricao
+          .replace(/^```\n?/, "")
+          .replace(/\n?```$/, "")
+          .trim()
+      : null;
 
   return (
     <AppShell>
@@ -219,10 +227,143 @@ export default function EvaluationDetailPage() {
               <h2 className="text-xs font-mono uppercase tracking-wider text-zinc-400">
                 Feedback da Gestão ({evaluation.evaluator.name})
               </h2>
-              <p className="text-sm text-zinc-200 mt-1.5 leading-relaxed">
+              <p className="text-sm text-zinc-200 mt-1.5 leading-relaxed whitespace-pre-line">
                 {evaluation.generalFeedback}
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Dados do Cliente e Ficha da Venda (13 Campos Directus) */}
+        {customer && (
+          <div className="rounded-xl border border-zinc-800 bg-[#101013] p-5 space-y-3.5">
+            <div className="flex items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
+              <span className="text-xs font-mono uppercase tracking-wider text-zinc-400">
+                Dados do Cliente & Ficha da Venda Vinculada
+              </span>
+              {customer.proposal && (
+                <span className="px-2 py-0.5 rounded bg-[#141418] border border-zinc-800 text-[11px] font-mono text-zinc-200">
+                  Proposta #{customer.proposal}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                  Nome do Cliente
+                </span>
+                <span className="text-zinc-100 font-semibold mt-0.5 block truncate">
+                  {customer.name || "-"}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                  CPF / Documento
+                </span>
+                <span className="text-zinc-100 font-mono mt-0.5 block">
+                  {customer.document || "-"}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                  Telefone Portabilidade
+                </span>
+                <span className="text-zinc-100 font-mono mt-0.5 block">
+                  {customer.phone || "-"}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                  Data da Venda
+                </span>
+                <span className="text-zinc-100 font-mono mt-0.5 block">
+                  {customer.saleDate || "-"}
+                </span>
+              </div>
+              {customer.contractedPlan && (
+                <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80 sm:col-span-2">
+                  <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                    Plano Contratado
+                  </span>
+                  <span className="text-zinc-100 font-medium mt-0.5 block truncate">
+                    {customer.contractedPlan}
+                  </span>
+                </div>
+              )}
+              {customer.motherName && (
+                <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                  <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                    Nome da Mãe
+                  </span>
+                  <span className="text-zinc-100 mt-0.5 block truncate">
+                    {customer.motherName}
+                  </span>
+                </div>
+              )}
+              {customer.birthDate && (
+                <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                  <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                    Data de Nascimento
+                  </span>
+                  <span className="text-zinc-100 font-mono mt-0.5 block">
+                    {customer.birthDate}
+                  </span>
+                </div>
+              )}
+              {customer.paymentMethod && (
+                <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                  <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                    Forma de Pagamento
+                  </span>
+                  <span className="text-zinc-100 mt-0.5 block">
+                    {customer.paymentMethod}
+                  </span>
+                </div>
+              )}
+              {customer.dueDate && (
+                <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                  <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                    Vencimento
+                  </span>
+                  <span className="text-zinc-100 font-mono mt-0.5 block">
+                    Dia {customer.dueDate}
+                  </span>
+                </div>
+              )}
+              {customer.earlyPortability && (
+                <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80">
+                  <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                    Portabilidade Antecipada
+                  </span>
+                  <span className="text-zinc-100 font-mono mt-0.5 block">
+                    {customer.earlyPortability}
+                  </span>
+                </div>
+              )}
+              {customer.fullAddress && (
+                <div className="p-2.5 rounded-lg bg-[#09090b] border border-zinc-800/80 sm:col-span-2 lg:col-span-4">
+                  <span className="text-[10px] font-mono uppercase text-zinc-500 block">
+                    Endereço Completo
+                  </span>
+                  <span className="text-zinc-200 mt-0.5 block">
+                    {customer.fullAddress}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Transcrição Completa da Chamada (Quando sincronizada do Directus) */}
+        {transcricao && (
+          <div className="rounded-xl border border-zinc-800 bg-[#101013] p-5 space-y-3">
+            <span className="text-xs font-mono uppercase tracking-wider text-zinc-400 block">
+              Transcrição da Gravação (Directus)
+            </span>
+            <pre className="p-4 rounded-lg bg-[#09090b] border border-zinc-800/80 text-xs font-mono text-zinc-300 whitespace-pre-wrap max-h-80 overflow-y-auto leading-relaxed">
+              {transcricao}
+            </pre>
           </div>
         )}
 

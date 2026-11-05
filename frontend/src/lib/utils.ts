@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { EvaluationStatus } from "@/types";
+import { EvaluationStatus, FormTemplate } from "@/types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -28,8 +28,25 @@ export function formatDateTime(isoString?: string): string {
   }
 }
 
+export function stripPlus55(raw: string): string {
+  const trimmed = (raw || "").trim();
+  if (trimmed.startsWith("+55")) {
+    return trimmed.slice(3).trim();
+  }
+  return trimmed;
+}
+
+export function extractCleanPhoneDigits(raw: string): string {
+  const trimmed = stripPlus55(raw);
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
+    return digits.slice(2);
+  }
+  return digits;
+}
+
 export function formatPhoneMask(value: string): string {
-  const digits = value.replace(/\D/g, "").slice(0, 11);
+  const digits = extractCleanPhoneDigits(value).slice(0, 11);
   if (digits.length === 0) return "";
   if (digits.length <= 2) return `(${digits}`;
   if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
@@ -37,6 +54,69 @@ export function formatPhoneMask(value: string): string {
     return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
   }
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`;
+}
+
+export interface LiveEvaluationScore {
+  obtainedPoints: number;
+  maxPossiblePoints: number;
+  rawPercentage: number;
+  finalPercentage: number;
+  fatalTriggered: boolean;
+  status: EvaluationStatus;
+}
+
+export function calculateLiveEvaluationScore(
+  form: FormTemplate | null | undefined,
+  checkedMap: Record<string, boolean>
+): LiveEvaluationScore {
+  if (!form) {
+    return {
+      obtainedPoints: 0,
+      maxPossiblePoints: 0,
+      rawPercentage: 0,
+      finalPercentage: 0,
+      fatalTriggered: false,
+      status: "REPROVADO",
+    };
+  }
+
+  const standardItems = form.items.filter((i) => !i.fatalError);
+  const fatalItems = form.items.filter((i) => i.fatalError);
+
+  const maxPossiblePoints = standardItems.reduce(
+    (acc, item) => acc + (item.points && item.points > 0 ? item.points : 1),
+    0
+  );
+  const obtainedPoints = standardItems
+    .filter((i) => checkedMap[i.id] === true)
+    .reduce(
+      (acc, item) => acc + (item.points && item.points > 0 ? item.points : 1),
+      0
+    );
+  const fatalTriggered = fatalItems.some((i) => checkedMap[i.id] === true);
+  const rawPercentage =
+    maxPossiblePoints > 0 ? (obtainedPoints / maxPossiblePoints) * 100 : 100;
+
+  if (fatalTriggered) {
+    return {
+      obtainedPoints,
+      maxPossiblePoints,
+      rawPercentage,
+      finalPercentage: 0,
+      fatalTriggered: true,
+      status: "ZERADO_ERRO_GRAVE",
+    };
+  }
+
+  const passing = Number(form.passingScorePercentage) || 80;
+  return {
+    obtainedPoints,
+    maxPossiblePoints,
+    rawPercentage,
+    finalPercentage: rawPercentage,
+    fatalTriggered: false,
+    status: rawPercentage >= passing ? "APROVADO" : "REPROVADO",
+  };
 }
 
 export function getEvaluationStatusBadge(status?: EvaluationStatus | null) {
