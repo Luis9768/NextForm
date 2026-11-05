@@ -494,8 +494,8 @@ public class DirectusEvaluationSyncService {
 
         String safeBaseUrl = validateSafeDirectusUrl(baseUrl);
         int limit = (request != null && request.limit() != null && request.limit() > 0)
-                ? Math.min(request.limit(), 500)
-                : 25;
+                ? request.limit()
+                : -1; // -1 = SEM LIMITE (puxa 100% de todos os registros da collection)
 
         String requestedCollection = (request != null && request.collection() != null && !request.collection().isBlank())
                 ? request.collection().trim()
@@ -558,7 +558,7 @@ public class DirectusEvaluationSyncService {
 
     @Transactional
     public DirectusSyncResultDto importLocalSamples(Integer maxPerCollection) {
-        int limit = (maxPerCollection != null && maxPerCollection > 0) ? Math.min(maxPerCollection, 100) : 10;
+        int limit = (maxPerCollection != null && maxPerCollection > 0) ? maxPerCollection : -1;
         return pullFromDirectusApi(new DirectusPullRequest(
                 configuredDirectusBaseUrl,
                 configuredDirectusToken,
@@ -1102,31 +1102,61 @@ public class DirectusEvaluationSyncService {
         }
         RestClient client = builder.build();
 
-        String rawJson;
-        try {
-            rawJson = client.get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/items/{collection}")
-                            .queryParam("fields", "*.*")
-                            .queryParam("limit", limit)
-                            .queryParam("sort", "-id")
-                            .build(collection))
-                    .retrieve()
-                    .body(String.class);
-        } catch (Exception exWithRelations) {
-            log.info("Fallback para consulta sem expansão relacional em /items/{}: {}", collection, exWithRelations.getMessage());
-            rawJson = client.get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/items/{collection}")
-                            .queryParam("fields", "*")
-                            .queryParam("limit", limit)
-                            .queryParam("sort", "-id")
-                            .build(collection))
-                    .retrieve()
-                    .body(String.class);
+        List<Map<String, Object>> allItems = new ArrayList<>();
+        int pageSize = 100;
+        int offset = 0;
+        boolean unlimited = limit <= 0;
+
+        while (true) {
+            int batchLimit = unlimited ? pageSize : Math.min(pageSize, limit - allItems.size());
+            if (batchLimit <= 0) {
+                break;
+            }
+            final int currentOffset = offset;
+            final int currentBatchLimit = batchLimit;
+
+            String rawJson;
+            try {
+                rawJson = client.get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/items/{collection}")
+                                .queryParam("fields", "*.*")
+                                .queryParam("limit", currentBatchLimit)
+                                .queryParam("offset", currentOffset)
+                                .queryParam("sort", "-id")
+                                .build(collection))
+                        .retrieve()
+                        .body(String.class);
+            } catch (Exception exWithRelations) {
+                log.info("Fallback para consulta sem expansão relacional em /items/{} (offset={}): {}",
+                        collection, currentOffset, exWithRelations.getMessage());
+                rawJson = client.get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/items/{collection}")
+                                .queryParam("fields", "*")
+                                .queryParam("limit", currentBatchLimit)
+                                .queryParam("offset", currentOffset)
+                                .queryParam("sort", "-id")
+                                .build(collection))
+                        .retrieve()
+                        .body(String.class);
+            }
+
+            List<Map<String, Object>> pageItems = parseDataArray(rawJson);
+            if (pageItems.isEmpty()) {
+                break;
+            }
+
+            allItems.addAll(pageItems);
+            offset += pageItems.size();
+
+            if (pageItems.size() < currentBatchLimit || (!unlimited && allItems.size() >= limit)) {
+                break;
+            }
         }
 
-        return parseDataArray(rawJson);
+        log.info("Collection '{}' carregada do Directus: {} registros obtidos.", collection, allItems.size());
+        return allItems;
     }
 
     @SuppressWarnings("unchecked")

@@ -50,7 +50,7 @@ export default function EvaluationsListPage() {
   const [directusBaseUrl, setDirectusBaseUrl] = useState("");
   const [directusApiToken, setDirectusApiToken] = useState("");
   const [directusCollection, setDirectusCollection] = useState("ALL");
-  const [directusLimit, setDirectusLimit] = useState(10);
+  const [directusLimit, setDirectusLimit] = useState(0);
   const [singleCollection, setSingleCollection] = useState(
     "Monitoria_Tim_Aquisicao"
   );
@@ -518,15 +518,14 @@ export default function EvaluationsListPage() {
 
                     <div>
                       <label className="block text-xs text-zinc-400 mb-1">
-                        Limite por Collection
+                        Limite (0 = Puxar Todas)
                       </label>
                       <input
                         type="number"
-                        min={1}
-                        max={500}
+                        min={0}
                         value={directusLimit}
                         onChange={(e) =>
-                          setDirectusLimit(Number(e.target.value) || 25)
+                          setDirectusLimit(Number(e.target.value) || 0)
                         }
                         className="w-full h-9 px-3 rounded-md border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
                       />

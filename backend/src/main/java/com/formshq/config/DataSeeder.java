@@ -58,7 +58,7 @@ public class DataSeeder implements CommandLineRunner {
     @Value("${app.security.bootstrap-admin.password:}")
     private String bootstrapAdminPassword;
 
-    @Value("${app.integrations.directus.initial-eval-limit:${DIRECTUS_INITIAL_EVAL_LIMIT:50}}")
+    @Value("${app.integrations.directus.initial-eval-limit:${DIRECTUS_INITIAL_EVAL_LIMIT:-1}}")
     private int directusInitialEvalLimit;
 
     @Override
