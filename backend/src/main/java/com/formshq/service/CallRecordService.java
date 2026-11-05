@@ -1,5 +1,6 @@
 package com.formshq.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.formshq.config.CacheConfig;
 import com.formshq.domain.entity.CallRecord;
 import com.formshq.domain.entity.Customer;
@@ -17,25 +18,29 @@ import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestClient;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @Service
@@ -48,6 +53,11 @@ public class CallRecordService {
     private final PasswordEncoder passwordEncoder;
     private final SectorScopePolicy sectorScopePolicy;
     private final R2ObjectStorageService r2ObjectStorageService;
+    private final DirectusEvaluationSyncService directusEvaluationSyncService;
+    private final ObjectMapper objectMapper;
+
+    @Value("${app.integrations.customer-webhook.url:${CUSTOMER_WEBHOOK_URL:}}")
+    private String customerWebhookUrl;
 
     @Transactional
     @CacheEvict(
@@ -184,7 +194,76 @@ public class CallRecordService {
         CallRecord saved = callRecordRepository.save(callRecord);
         log.info("Gravação anexada pela gestora registrada: externalCallId={}, analyst={}, phone={}",
                 extCallId, analyst.getEmail(), phoneKey);
+
+        // Dispara automaticamente o webhook do workflow n8n com o áudio e os dados do cliente/formulário
+        dispatchAudioWorkflowWebhookAsync(saved, customer, analyst);
+
         return CallRecordResponse.fromEntity(saved);
+    }
+
+    private void dispatchAudioWorkflowWebhookAsync(CallRecord callRecord, Customer customer, User analyst) {
+        if (customerWebhookUrl == null || customerWebhookUrl.isBlank()) {
+            return;
+        }
+        final String targetUrl = customerWebhookUrl.trim();
+        final String callIdStr = callRecord.getId().toString();
+        final String extCallId = callRecord.getExternalCallId();
+        final String audioUrl = callRecord.getAudioUrl();
+        final String audioFileKey = audioUrl != null && audioUrl.contains("/")
+                ? audioUrl.substring(audioUrl.lastIndexOf("/") + 1)
+                : extCallId;
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", callIdStr);
+        payload.put("id_formullario", callIdStr);
+        payload.put("externalCallId", extCallId);
+        payload.put("telefone", customer.getPhone());
+        payload.put("Telefone_Portabilidade", customer.getPhone());
+        payload.put("ligacao", audioFileKey);
+        payload.put("Audio_Ligacao", Map.of(
+                "service", "nexform",
+                "source", audioFileKey,
+                "url", audioUrl != null ? audioUrl : ""
+        ));
+        payload.put("audioUrl", audioUrl);
+        payload.put("Operador", analyst.getId().toString());
+        payload.put("operadorNome", analyst.getName());
+        payload.put("operadorEmail", analyst.getEmail());
+        payload.put("Nome", customer.getName());
+        payload.put("CPF", customer.getDocument());
+        payload.put("Proposta", customer.getProposal());
+        payload.put("Data_de_nascimento", customer.getBirthDate());
+        payload.put("Nome_da_mae", customer.getMotherName());
+        payload.put("Email", customer.getEmail());
+        payload.put("Forma_de_Pagamento", customer.getPaymentMethod());
+        payload.put("Tipo_de_Fatura", customer.getInvoiceType());
+        payload.put("Vencimento", customer.getDueDate());
+        payload.put("Portabilidade_Antecipada", customer.getEarlyPortability());
+        payload.put("Data_da_venda", customer.getSaleDate());
+        payload.put("Plano_Contratado", customer.getContractedPlan());
+        payload.put("Endereco_Completo", customer.getFullAddress());
+        payload.put("callbackUrl", "/api/v1/integrations/directus/workflow-upsert/" + callIdStr);
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                String responseBody = RestClient.create()
+                        .post()
+                        .uri(targetUrl)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(payload)
+                        .retrieve()
+                        .body(String.class);
+
+                if (responseBody != null && !responseBody.isBlank()
+                        && (responseBody.contains("Transcricao") || responseBody.contains("Nota_Final") || responseBody.contains("valores_plano"))) {
+                    Object parsed = objectMapper.readValue(responseBody, Object.class);
+                    directusEvaluationSyncService.upsertFromWorkflowPayload(callIdStr, "Monitoria_Tim_Aquisicao", parsed);
+                    log.info("Avaliação do workflow n8n aplicada automaticamente para a ligação {}", extCallId);
+                }
+            } catch (Exception e) {
+                log.warn("Aviso ao disparar webhook de áudio/workflow para {}: {}", targetUrl, e.getMessage());
+            }
+        });
     }
 
     @Transactional(readOnly = true)

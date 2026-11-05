@@ -84,4 +84,34 @@ public class DirectusIntegrationController {
     public ResponseEntity<java.util.Map<String, Object>> backupAllDirectusAudios() {
         return ResponseEntity.ok(directusSyncService.backupAllDirectusAudios());
     }
+
+    @RequestMapping(
+            value = {"/workflow-upsert", "/workflow-upsert/{id}"},
+            method = {RequestMethod.POST, RequestMethod.PUT, RequestMethod.PATCH}
+    )
+    @Operation(
+            summary = "Endpoint para o workflow n8n criar ou atualizar o formulário/avaliação com áudio, transcrição, dados do cliente e os 32 critérios"
+    )
+    public ResponseEntity<DirectusSyncResultDto> workflowUpsertEvaluation(
+            @PathVariable(required = false) String id,
+            @RequestParam(required = false) String collection,
+            @RequestBody Object rawPayload
+    ) {
+        return ResponseEntity.ok(directusSyncService.upsertFromWorkflowPayload(id, collection, rawPayload));
+    }
+
+    @RequestMapping(
+            value = "/items/{collection}/{itemId}",
+            method = {RequestMethod.PUT, RequestMethod.PATCH}
+    )
+    @Operation(
+            summary = "Compatível com o formato Directus (PATCH/PUT /items/{collection}/{itemId}) para atualizar formulário a partir do workflow n8n"
+    )
+    public ResponseEntity<DirectusSyncResultDto> updateDirectusCompatibleItem(
+            @PathVariable String collection,
+            @PathVariable String itemId,
+            @RequestBody Object rawPayload
+    ) {
+        return ResponseEntity.ok(directusSyncService.upsertFromWorkflowPayload(itemId, collection, rawPayload));
+    }
 }

@@ -30,14 +30,33 @@ public class N8nApiKeyFilter extends OncePerRequestFilter {
     private static final String DIRECTUS_PATH_PREFIX = "/api/v1/integrations/directus";
 
     private final String expectedApiKey;
+    private final String directusApiToken;
     private final ObjectMapper objectMapper;
 
     public N8nApiKeyFilter(
             @Value("${app.security.n8n-api-key}") String expectedApiKey,
+            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String directusApiToken,
             ObjectMapper objectMapper
     ) {
         this.expectedApiKey = expectedApiKey;
+        this.directusApiToken = directusApiToken;
         this.objectMapper = objectMapper;
+    }
+
+    private String resolveStaticToken(HttpServletRequest request) {
+        String providedKey = request.getHeader(API_KEY_HEADER);
+        if (providedKey != null && !providedKey.isBlank()) {
+            return providedKey.trim();
+        }
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7).trim();
+            // Tokens estáticos de integração (n8n / Directus) não possuem estrutura JWT de 3 partes separadas por ponto
+            if (!token.isEmpty() && !token.contains(".")) {
+                return token;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -53,8 +72,8 @@ public class N8nApiKeyFilter extends OncePerRequestFilter {
             return false;
         }
         if (path.startsWith(DIRECTUS_PATH_PREFIX)) {
-            String providedKey = request.getHeader(API_KEY_HEADER);
-            return providedKey == null || providedKey.isBlank();
+            String token = resolveStaticToken(request);
+            return token == null || token.isBlank();
         }
         return true;
     }
@@ -65,9 +84,14 @@ public class N8nApiKeyFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
-        String providedKey = request.getHeader(API_KEY_HEADER);
+        String providedKey = resolveStaticToken(request);
+        boolean matchesN8nKey = providedKey != null && constantTimeEquals(expectedApiKey, providedKey);
+        boolean matchesDirectusToken = providedKey != null
+                && directusApiToken != null
+                && !directusApiToken.isBlank()
+                && constantTimeEquals(directusApiToken.trim(), providedKey);
 
-        if (providedKey == null || providedKey.isBlank() || !constantTimeEquals(expectedApiKey, providedKey)) {
+        if (!matchesN8nKey && !matchesDirectusToken) {
             response.setStatus(HttpStatus.UNAUTHORIZED.value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());

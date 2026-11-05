@@ -631,6 +631,54 @@ public class DirectusEvaluationSyncService {
         return processItemsBatch(request.collection(), baseUrl, request.items());
     }
 
+    /**
+     * Recebe o payload do workflow n8n (ex: [ { "data": { "id": 655, ... } } ] ou { "data": { ... } } ou { ... })
+     * e cria ou atualiza integralmente a Ligação, o Cliente e os 32 critérios da Avaliação no NEXFORM.
+     */
+    @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
+    public DirectusSyncResultDto upsertFromWorkflowPayload(String idFromPath, String collectionHint, Object rawPayload) {
+        List<Map<String, Object>> unwrappedItems = unwrapWorkflowItems(rawPayload);
+        if (unwrappedItems.isEmpty()) {
+            throw new BusinessRuleException("Payload do workflow vazio ou formato JSON não reconhecido.");
+        }
+
+        if (idFromPath != null && !idFromPath.isBlank()) {
+            for (Map<String, Object> item : unwrappedItems) {
+                item.putIfAbsent("id", idFromPath.trim());
+                item.put("_targetIdOverride", idFromPath.trim());
+            }
+        }
+
+        String effectiveCollection = (collectionHint != null && !collectionHint.isBlank()) ? collectionHint : "AUTO";
+        return processItemsBatch(effectiveCollection, configuredDirectusBaseUrl, unwrappedItems);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> unwrapWorkflowItems(Object rawPayload) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        if (rawPayload == null) {
+            return result;
+        }
+        if (rawPayload instanceof List<?> list) {
+            for (Object elem : list) {
+                result.addAll(unwrapWorkflowItems(elem));
+            }
+        } else if (rawPayload instanceof Map<?, ?> rawMap) {
+            Map<String, Object> map = new LinkedHashMap<>((Map<String, Object>) rawMap);
+            Object dataNode = map.get("data");
+            if (dataNode instanceof Map<?, ?> || dataNode instanceof List<?>) {
+                result.addAll(unwrapWorkflowItems(dataNode));
+            } else {
+                result.add(map);
+            }
+        }
+        return result;
+    }
+
     @Transactional
     public DirectusSyncResultDto importLocalSamples(Integer maxPerCollection) {
         int limit = (maxPerCollection != null && maxPerCollection > 0) ? maxPerCollection : -1;
@@ -667,8 +715,19 @@ public class DirectusEvaluationSyncService {
                 String collection = detectCollection(explicitCollection, item);
                 processedCollections.add(collection);
 
-                String directusId = extractString(item, "id", UUID.randomUUID().toString().substring(0, 8));
+                String targetOverride = extractString(item, "_targetIdOverride", null);
+                String directusId = firstNonBlank(
+                        targetOverride,
+                        extractString(item, "id", null),
+                        extractString(item, "id_formullario", null),
+                        extractString(item, "callRecordId", null),
+                        extractString(item, "evaluationId", null),
+                        extractString(item, "externalCallId", null),
+                        UUID.randomUUID().toString().substring(0, 8)
+                );
                 String externalCallId = buildDeterministicExternalCallId(collection, directusId);
+
+                Optional<CallRecord> existingCallOpt = findExistingCallForWorkflowUpsert(directusId, externalCallId, item);
 
                 Object rawDataVendaObj = item.get("Data_da_venda");
                 Object rawNomeObj = item.get("Nome");
@@ -676,8 +735,8 @@ public class DirectusEvaluationSyncService {
                         || (rawNomeObj != null && "undefined".equalsIgnoreCase(rawNomeObj.toString().trim()));
                 String audioUuid = extractAudioUuid(item);
 
-                if (isBrokenUndefinedRecord || audioUuid == null || audioUuid.isBlank()) {
-                    callRecordRepository.findByExternalCallId(externalCallId).ifPresent(existing -> {
+                if (isBrokenUndefinedRecord || ((audioUuid == null || audioUuid.isBlank()) && existingCallOpt.isEmpty())) {
+                    existingCallOpt.ifPresent(existing -> {
                         if (existing.getEvaluation() != null) {
                             Evaluation ev = existing.getEvaluation();
                             existing.setEvaluation(null);
@@ -707,6 +766,7 @@ public class DirectusEvaluationSyncService {
                         item.get("Data_monitoria")
                 );
                 OffsetDateTime evaluatedAt = resolveValidDirectusDate(
+                        item.get("date_updated"),
                         item.get("date_created"),
                         item.get("Data_monitoria"),
                         callDate
@@ -714,9 +774,14 @@ public class DirectusEvaluationSyncService {
 
                 int durationSeconds = extractCallDurationSeconds(item, directusId);
                 String returnAudioUuid = extractReturnAudioUuid(item);
-                String audioUrl = resolvePlayableAudioUrl(audioUuid, externalCallId);
+                String audioUrl = (audioUuid != null && !audioUuid.isBlank())
+                        ? resolvePlayableAudioUrl(audioUuid, externalCallId)
+                        : (existingCallOpt.map(CallRecord::getAudioUrl).orElseGet(() -> resolvePlayableAudioUrl(null, externalCallId)));
 
                 Map<String, Object> metadata = new LinkedHashMap<>();
+                if (existingCallOpt.isPresent() && existingCallOpt.get().getMetadata() != null) {
+                    metadata.putAll(existingCallOpt.get().getMetadata());
+                }
                 metadata.put("source", "directus");
                 metadata.put("directusCollection", collection);
                 metadata.put("directusItemId", directusId);
@@ -739,26 +804,6 @@ public class DirectusEvaluationSyncService {
                     metadata.put("transcricao", transcricao);
                 }
 
-                Optional<CallRecord> existingCallOpt = callRecordRepository.findByExternalCallId(externalCallId);
-                if (existingCallOpt.isPresent()) {
-                    CallRecord existingCall = existingCallOpt.get();
-                    existingCall.setCustomer(customer);
-                    existingCall.setCustomerIdentifier(customer.getPhone());
-                    existingCall.setCallDate(callDate);
-                    existingCall.setDurationSeconds(durationSeconds);
-                    existingCall.setAudioUrl(audioUrl);
-                    existingCall.setMetadata(metadata);
-                    if (existingCall.getEvaluation() != null) {
-                        Evaluation existingEval = existingCall.getEvaluation();
-                        existingEval.setEvaluatedAt(evaluatedAt);
-                        existingEval.setCreatedAt(evaluatedAt);
-                        evaluationRepository.save(existingEval);
-                    }
-                    callRecordRepository.save(existingCall);
-                    skippedDuplicates++;
-                    continue;
-                }
-
                 User evaluator = resolveOrProvisionEvaluator(item.get("user_created"), targetSector, fallbackEvaluator);
                 User analyst = resolveOrProvisionAnalyst(
                         item.get("Operador"),
@@ -767,6 +812,62 @@ public class DirectusEvaluationSyncService {
                         evaluator,
                         provisionedAnalysts
                 );
+
+                if (existingCallOpt.isPresent()) {
+                    CallRecord existingCall = existingCallOpt.get();
+                    if (item.get("Operador") != null || transcricao != null) {
+                        existingCall.setAnalyst(analyst);
+                    }
+                    existingCall.setCustomer(customer);
+                    existingCall.setCustomerIdentifier(customer.getPhone());
+                    existingCall.setCallDate(callDate);
+                    existingCall.setDurationSeconds(durationSeconds);
+                    existingCall.setAudioUrl(audioUrl);
+                    existingCall.setStatus(CallStatus.AVALIADA);
+                    existingCall.setMetadata(metadata);
+
+                    Evaluation freshEval = buildEvaluationEntity(
+                            collection,
+                            item,
+                            existingCall,
+                            evaluator,
+                            existingCall.getAnalyst(),
+                            targetSector,
+                            template,
+                            evaluatedAt
+                    );
+
+                    if (existingCall.getEvaluation() != null) {
+                        Evaluation existingEval = existingCall.getEvaluation();
+                        existingEval.setAnalyst(existingCall.getAnalyst());
+                        existingEval.setAnalystSectorSnapshot(targetSector);
+                        existingEval.setFormTemplate(template);
+                        existingEval.setFormNameSnapshot(template.getName());
+                        existingEval.setFormVersionSnapshot(template.getVersion());
+                        existingEval.setPassingScoreSnapshot(template.getPassingScorePercentage());
+                        existingEval.setGeneralFeedback(freshEval.getGeneralFeedback());
+                        existingEval.setObtainedPoints(freshEval.getObtainedPoints());
+                        existingEval.setMaxPossiblePoints(freshEval.getMaxPossiblePoints());
+                        existingEval.setRawScorePercentage(freshEval.getRawScorePercentage());
+                        existingEval.setFinalScorePercentage(freshEval.getFinalScorePercentage());
+                        existingEval.setFatalErrorTriggered(freshEval.isFatalErrorTriggered());
+                        existingEval.setStatus(freshEval.getStatus());
+                        existingEval.setEvaluatedAt(evaluatedAt);
+                        existingEval.setCreatedAt(evaluatedAt);
+                        existingEval.getItemSnapshots().clear();
+                        for (EvaluationItemSnapshot snap : freshEval.getItemSnapshots()) {
+                            existingEval.addItemSnapshot(snap);
+                        }
+                        evaluationRepository.save(existingEval);
+                    } else {
+                        existingCall.setEvaluation(freshEval);
+                        evaluationRepository.save(freshEval);
+                    }
+                    callRecordRepository.save(existingCall);
+                    importedCount++;
+                    importedCodes.add(existingCall.getExternalCallId());
+                    continue;
+                }
 
                 CallRecord callRecord = CallRecord.builder()
                         .externalCallId(externalCallId)
@@ -1343,9 +1444,14 @@ public class DirectusEvaluationSyncService {
             if (trimmed.contains("@")) {
                 email = stripAccents(trimmed.toLowerCase());
             } else if (trimmed.length() == 36 && trimmed.contains("-")) {
-                String shortCode = trimmed.substring(0, 6).toUpperCase();
-                displayName = "Operador #" + shortCode + " (" + sectorName + ")";
-                email = "operador." + shortCode.toLowerCase() + "@headsetbrasil.com";
+                try {
+                    UUID opUuid = UUID.fromString(trimmed);
+                    Optional<User> existingByUuid = userRepository.findById(opUuid);
+                    if (existingByUuid.isPresent()) {
+                        return existingByUuid.get();
+                    }
+                } catch (Exception ignored) {
+                }
             } else {
                 displayName = formatTitleCase(trimmed);
             }
@@ -1361,6 +1467,12 @@ public class DirectusEvaluationSyncService {
                     displayName = formatTitleCase(candidate);
                 }
             }
+        }
+
+        if ((displayName == null || displayName.isBlank()) && operadorRaw instanceof String opStr && opStr.trim().length() == 36) {
+            String shortCode = opStr.trim().substring(0, 6).toUpperCase();
+            displayName = "Operador #" + shortCode + " (" + sectorName + ")";
+            email = "operador." + shortCode.toLowerCase() + "@headsetbrasil.com";
         }
 
         if (email != null && !email.isBlank()) {
@@ -1711,8 +1823,76 @@ public class DirectusEvaluationSyncService {
         return null;
     }
 
+    private Optional<CallRecord> findExistingCallForWorkflowUpsert(
+            String directusId,
+            String externalCallId,
+            Map<String, Object> item
+    ) {
+        if (directusId != null && directusId.length() == 36 && directusId.contains("-")) {
+            try {
+                UUID uuid = UUID.fromString(directusId);
+                Optional<CallRecord> byCallUuid = callRecordRepository.findWithDetailsById(uuid);
+                if (byCallUuid.isPresent()) {
+                    return byCallUuid;
+                }
+                Optional<Evaluation> byEvalUuid = evaluationRepository.findWithDetailsById(uuid);
+                if (byEvalUuid.isPresent() && byEvalUuid.get().getCallRecord() != null) {
+                    return Optional.of(byEvalUuid.get().getCallRecord());
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (directusId != null && !directusId.isBlank()) {
+            Optional<CallRecord> byRawExt = callRecordRepository.findByExternalCallId(directusId.trim());
+            if (byRawExt.isPresent()) {
+                return byRawExt;
+            }
+        }
+        Optional<CallRecord> byDetExt = callRecordRepository.findByExternalCallId(externalCallId);
+        if (byDetExt.isPresent()) {
+            return byDetExt;
+        }
+        String rawPhone = extractString(item, "Telefone_Portabilidade", null);
+        if (rawPhone != null && !rawPhone.isBlank()) {
+            String cleanPhone = CustomerLookupService.normalizePhone(rawPhone);
+            List<CallRecord> byPhone = callRecordRepository.findByCustomerIdentifierContainingOrderByCallDateDesc(cleanPhone);
+            for (CallRecord candidate : byPhone) {
+                if (candidate.getStatus() == CallStatus.PENDENTE) {
+                    return Optional.of(candidate);
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
     @SuppressWarnings("unchecked")
     private int extractCallDurationSeconds(Map<String, Object> item, String directusId) {
+        // 1. Se houver Transcricao com marcações de tempo [MM:SS] ou [HH:MM:SS], extrai o último timestamp real da conversa
+        String transcricao = extractString(item, "Transcricao", null);
+        if (transcricao != null && !transcricao.isBlank()) {
+            java.util.regex.Matcher mTime = java.util.regex.Pattern
+                    .compile("\\[(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\]")
+                    .matcher(transcricao);
+            int maxTimestampSecs = 0;
+            while (mTime.find()) {
+                try {
+                    int p1 = Integer.parseInt(mTime.group(1));
+                    int p2 = Integer.parseInt(mTime.group(2));
+                    String g3 = mTime.group(3);
+                    int secs = (g3 != null)
+                            ? (p1 * 3600 + p2 * 60 + Integer.parseInt(g3))
+                            : (p1 * 60 + p2);
+                    if (secs > maxTimestampSecs && secs <= 7200) {
+                        maxTimestampSecs = secs;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            if (maxTimestampSecs >= 10) {
+                return maxTimestampSecs;
+            }
+        }
+
         List<Object> candidates = Arrays.asList(
                 item.get("ligacao"),
                 item.get("Audio_Chamada"),
@@ -1748,7 +1928,6 @@ public class DirectusEvaluationSyncService {
             }
         }
 
-        String transcricao = extractString(item, "Transcricao", null);
         if (transcricao != null && transcricao.length() > 80) {
             int estimatedFromTranscript = Math.round(transcricao.length() / 12.0f);
             return Math.max(45, Math.min(estimatedFromTranscript, 3600));
