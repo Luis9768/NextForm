@@ -126,12 +126,13 @@ function AnalystEvaluationFlowInner() {
   const [step, setStep] = useState<FlowStep>(1);
   const [flowError, setFlowError] = useState<string | null>(null);
 
-  // Estado de Setor da Avaliação (Sincronizado com Analista e Formulário)
-  const [selectedSector, setSelectedSector] = useState<string>(
-    initialSectorParam || ""
+  // Setor fixo do analista (a alteração de setor ocorre exclusivamente na tela /analysts)
+  const analystSector = useMemo(
+    () => analyst?.department || initialSectorParam || "SAC",
+    [analyst?.department, initialSectorParam]
   );
-  const [isSwitchingSector, setIsSwitchingSector] = useState(false);
-  const initializedAnalystSectorRef = useRef(false);
+  const [isSwitchingForm, setIsSwitchingForm] = useState(false);
+  const initializedAnalystFormRef = useRef(false);
 
   // Campos Condicionais SAC / Retenção (Regra de Negócio: Ticket Zendesk + Data do Atendimento + Data da Monitoria)
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -217,21 +218,15 @@ function AnalystEvaluationFlowInner() {
     setObservationMap({});
   }, []);
 
-  // Inicializa o setor e o formulário correspondente assim que o perfil do analista e os templates carregarem
+  // Inicializa o formulário correspondente ao setor do analista assim que os dados carregarem
   useEffect(() => {
     if (existingTemplates.length === 0) return;
+    const targetSector = analyst?.department || initialSectorParam;
+    if (!targetSector) return;
 
-    const resolvedInitialSector =
-      selectedSector || analyst?.department || initialSectorParam;
-    if (!resolvedInitialSector) return;
-
-    if (!initializedAnalystSectorRef.current) {
-      initializedAnalystSectorRef.current = true;
-      setSelectedSector(resolvedInitialSector);
-      const matched = resolveTemplateForSector(
-        resolvedInitialSector,
-        existingTemplates
-      );
+    if (!initializedAnalystFormRef.current) {
+      initializedAnalystFormRef.current = true;
+      const matched = resolveTemplateForSector(targetSector, existingTemplates);
       if (matched) {
         applyTemplateSelection(matched);
       }
@@ -240,27 +235,47 @@ function AnalystEvaluationFlowInner() {
     analyst?.department,
     existingTemplates,
     initialSectorParam,
-    selectedSector,
     applyTemplateSelection,
   ]);
 
-  // Determina se o setor atual exige os campos de SAC / Retenção
+  const activeFormForCall = useMemo<FormTemplate | null>(() => {
+    if (existingTemplates.length === 0) return null;
+    if (selectedTemplateId) {
+      const found = existingTemplates.find((t) => t.id === selectedTemplateId);
+      if (found) return found;
+    }
+    return resolveTemplateForSector(analystSector, existingTemplates);
+  }, [existingTemplates, selectedTemplateId, analystSector]);
+
+  // Determina se a avaliação atual exige os campos de SAC / Retenção (pelo setor do analista ou formulário selecionado)
   const isSacOrRetencao = useMemo(() => {
-    const s = (selectedSector || analyst?.department || "").toLowerCase();
+    const formContext = `${activeFormForCall?.sector || ""} ${
+      activeFormForCall?.name || ""
+    }`.toLowerCase();
+    if (
+      formContext.includes("portabilidade") ||
+      formContext.includes("aquisi")
+    ) {
+      return false;
+    }
+    if (
+      formContext.includes("sac") ||
+      formContext.includes("reten") ||
+      formContext.includes("cobran")
+    ) {
+      return true;
+    }
+    const s = analystSector.toLowerCase();
     return (
       s.includes("sac") ||
       s.includes("reten") ||
       s.includes("cobran") ||
       s.includes("suporte")
     );
-  }, [selectedSector, analyst?.department]);
+  }, [activeFormForCall, analystSector]);
 
-  const resetCustomerFieldsForSectorSwitch = useCallback(
-    (nextSector: string) => {
-      const nextIsSacRet =
-        nextSector.toLowerCase().includes("sac") ||
-        nextSector.toLowerCase().includes("reten") ||
-        nextSector.toLowerCase().includes("cobran");
+  const resetCustomerFieldsForModeSwitch = useCallback(
+    (nextIsSacRet: boolean) => {
       setFlowError(null);
       if (nextIsSacRet) {
         setPhoneInput("");
@@ -289,63 +304,33 @@ function AnalystEvaluationFlowInner() {
     [todayIso]
   );
 
-  // Handler de troca dinâmica de setor (sem travamentos, com feedback visual e atualização da matriz)
-  const handleSectorChange = useCallback(
-    async (newSector: string) => {
-      if (!newSector || newSector === selectedSector) return;
-      setIsSwitchingSector(true);
-      setSelectedSector(newSector);
-      resetCustomerFieldsForSectorSwitch(newSector);
+  // Handler para trocar o formulário selecionado no topo da tela de avaliação
+  const handleFormTemplateSelect = useCallback(
+    (templateId: string) => {
+      const chosen = existingTemplates.find((t) => t.id === templateId);
+      if (!chosen || chosen.id === selectedTemplateId) return;
 
-      const matchedTemplate = resolveTemplateForSector(
-        newSector,
-        existingTemplates
-      );
-      if (matchedTemplate) {
-        applyTemplateSelection(matchedTemplate);
-      }
+      setIsSwitchingForm(true);
+      applyTemplateSelection(chosen);
 
-      try {
-        if (analystId) {
-          await usersApi.changeSector(analystId, {
-            newSector,
-            reason: "Troca de setor durante abertura de avaliação",
-          });
-          queryClient.invalidateQueries({
-            queryKey: ["analyst-profile", analystId],
-          });
-          queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
-          queryClient.invalidateQueries({
-            queryKey: ["analysts-sidebar-list"],
-          });
-        }
-      } catch {
-        // Mesmo se o analista pertencer a outro gestor, mantém o formulário do setor escolhido ativo na avaliação
-      } finally {
-        setTimeout(() => setIsSwitchingSector(false), 180);
-      }
+      const chosenContext = `${chosen.sector || ""} ${
+        chosen.name || ""
+      }`.toLowerCase();
+      const nextIsSacRet =
+        chosenContext.includes("sac") ||
+        chosenContext.includes("reten") ||
+        chosenContext.includes("cobran");
+      resetCustomerFieldsForModeSwitch(nextIsSacRet);
+
+      setTimeout(() => setIsSwitchingForm(false), 150);
     },
     [
-      analystId,
       applyTemplateSelection,
       existingTemplates,
-      queryClient,
-      resetCustomerFieldsForSectorSwitch,
-      selectedSector,
+      resetCustomerFieldsForModeSwitch,
+      selectedTemplateId,
     ]
   );
-
-  const activeFormForCall = useMemo<FormTemplate | null>(() => {
-    if (existingTemplates.length === 0) return null;
-    if (selectedTemplateId) {
-      const found = existingTemplates.find((t) => t.id === selectedTemplateId);
-      if (found) return found;
-    }
-    return resolveTemplateForSector(
-      selectedSector || analyst?.department || "SAC",
-      existingTemplates
-    );
-  }, [existingTemplates, selectedTemplateId, selectedSector, analyst?.department]);
 
   const applyCustomerFields = useCallback((cust: CustomerInfo) => {
     setCustomerInfo(cust);
@@ -421,7 +406,7 @@ function AnalystEvaluationFlowInner() {
       if (!ticketInput.trim()) {
         setFlowError(
           "Informe o número do Ticket Zendesk para prosseguir com a avaliação de " +
-            (selectedSector || "SAC / Retenção") +
+            analystSector +
             "."
         );
         return;
@@ -596,10 +581,10 @@ function AnalystEvaluationFlowInner() {
         : customerNameInput;
 
       const resolvedCampaign = isSacOrRetencao
-        ? `${selectedSector || "SAC"} • Ticket #${ticketInput
+        ? `${analystSector} • Ticket #${ticketInput
             .trim()
             .replace(/^#/, "")}`
-        : `${selectedSector || "Aquisição"} • Portabilidade`;
+        : `${analystSector} • Portabilidade`;
 
       return callsApi.uploadRecording({
         files: validFiles,
@@ -613,7 +598,7 @@ function AnalystEvaluationFlowInner() {
         ticket: isSacOrRetencao ? ticketInput.trim() : undefined,
         attendanceDate: isSacOrRetencao ? dataAtendimentoInput : undefined,
         monitoringDate: isSacOrRetencao ? dataMonitoriaInput : undefined,
-        sector: selectedSector || analyst?.department || "SAC",
+        sector: analystSector,
       });
     },
     onSuccess: (createdCall) => {
@@ -734,35 +719,35 @@ function AnalystEvaluationFlowInner() {
                 {analyst?.name || "Carregando Analista..."}
               </h1>
 
-              {/* Seletor de Setor da Avaliação (Sincroniza Formulário e Campos do Cliente Instantaneamente) */}
-              <div className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-zinc-700 bg-[#121215]">
+              {/* Badge Fixo do Setor do Analista (Alteração de setor permitida apenas na tela /analysts) */}
+              <span className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-zinc-800 bg-zinc-900 text-xs font-mono text-zinc-300">
                 <UserCheck className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                <span>Setor: {analystSector}</span>
+              </span>
+
+              {/* Seletor de Formulário de Avaliação */}
+              <div className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-zinc-700 bg-[#121215]">
+                <FolderKanban className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
                 <span className="text-[11px] font-mono text-zinc-400">
-                  Setor:
+                  Selecione o formulário:
                 </span>
                 <select
-                  value={selectedSector || analyst?.department || "SAC"}
-                  onChange={(e) => handleSectorChange(e.target.value)}
-                  disabled={isSwitchingSector}
-                  aria-label="Selecionar setor da avaliação"
-                  className="bg-transparent text-xs font-semibold text-zinc-100 focus:outline-none cursor-pointer"
+                  value={activeFormForCall?.id || ""}
+                  onChange={(e) => handleFormTemplateSelect(e.target.value)}
+                  disabled={isSwitchingForm || existingTemplates.length === 0}
+                  aria-label="Selecione o formulário de avaliação"
+                  className="bg-transparent text-xs font-semibold text-zinc-100 focus:outline-none cursor-pointer max-w-[240px] truncate"
                 >
-                  {AVAILABLE_SECTORS.map((sec) => (
-                    <option key={sec} value={sec} className="bg-[#0b0b0d]">
-                      {sec}
+                  {existingTemplates.map((tpl) => (
+                    <option key={tpl.id} value={tpl.id} className="bg-[#0b0b0d]">
+                      {tpl.name} ({tpl.maxPossiblePoints} pts)
                     </option>
                   ))}
                 </select>
-                {isSwitchingSector && (
+                {isSwitchingForm && (
                   <Loader2 className="h-3 w-3 animate-spin text-zinc-300" />
                 )}
               </div>
-
-              {activeFormForCall && (
-                <span className="text-[11px] font-mono px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-300 truncate max-w-[260px]">
-                  Matriz: {activeFormForCall.name}
-                </span>
-              )}
             </div>
           </div>
 
@@ -808,15 +793,15 @@ function AnalystEvaluationFlowInner() {
           </div>
         )}
 
-        {/* Skeleton leve durante carregamento inicial ou troca de setor */}
-        {isAnalystLoading || isTemplatesLoading || isSwitchingSector ? (
+        {/* Skeleton leve durante carregamento inicial ou troca de formulário */}
+        {isAnalystLoading || isTemplatesLoading || isSwitchingForm ? (
           <div className="max-w-4xl p-6 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-4">
             <div className="flex items-center gap-2 text-xs font-mono text-zinc-400">
               <Loader2 className="h-4 w-4 animate-spin text-zinc-200" />
               <span>
-                Sincronizando estrutura do formulário para o setor{" "}
+                Carregando estrutura do formulário{" "}
                 <strong className="text-zinc-100">
-                  {selectedSector || analyst?.department || "..."}
+                  {activeFormForCall?.name || "..."}
                 </strong>
               </span>
             </div>
@@ -850,7 +835,7 @@ function AnalystEvaluationFlowInner() {
                       <h2 className="text-sm font-bold text-zinc-100">
                         Dados do Cliente •{" "}
                         <span className="text-zinc-300 font-mono">
-                          {selectedSector || analyst?.department || "SAC"}
+                          {activeFormForCall?.name || analystSector}
                         </span>
                       </h2>
                     </div>
@@ -1906,7 +1891,7 @@ function AnalystEvaluationFlowInner() {
                       <div className="flex justify-between">
                         <span className="text-zinc-500">Setor:</span>
                         <span className="text-zinc-200">
-                          {selectedSector || analyst?.department || "SAC"}
+                          {analystSector}
                         </span>
                       </div>
                       <div className="flex justify-between">
