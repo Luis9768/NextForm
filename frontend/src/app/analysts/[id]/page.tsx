@@ -125,12 +125,6 @@ function AnalystEvaluationFlowInner() {
 
   const [step, setStep] = useState<FlowStep>(1);
   const [flowError, setFlowError] = useState<string | null>(null);
-
-  // Setor fixo do analista (a alteração de setor ocorre exclusivamente na tela /analysts)
-  const analystSector = useMemo(
-    () => analyst?.department || initialSectorParam || "SAC",
-    [analyst?.department, initialSectorParam]
-  );
   const [isSwitchingForm, setIsSwitchingForm] = useState(false);
   const initializedAnalystFormRef = useRef(false);
 
@@ -200,6 +194,12 @@ function AnalystEvaluationFlowInner() {
     queryFn: () => usersApi.getById(analystId),
     enabled: !!analystId && isGestor,
   });
+
+  // Setor fixo do analista (a alteração de setor ocorre exclusivamente na tela /analysts)
+  const analystSector = useMemo(
+    () => analyst?.department || initialSectorParam || "SAC",
+    [analyst?.department, initialSectorParam]
+  );
 
   const { data: existingTemplates = [], isLoading: isTemplatesLoading } =
     useQuery({
