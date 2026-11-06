@@ -1,8 +1,15 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -10,19 +17,24 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Calendar,
   Check,
   CheckCircle2,
   Clock,
   FileAudio,
   FileCheck2,
   FolderKanban,
+  Hash,
   Headphones,
   Loader2,
   Phone,
+  Plus,
   RefreshCw,
   ShieldAlert,
+  Trash2,
   UploadCloud,
   User,
+  UserCheck,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
@@ -45,36 +57,95 @@ import { CallRecord, CustomerInfo, FormTemplate } from "@/types";
 
 type FlowStep = 1 | 2 | 3;
 
+const AVAILABLE_SECTORS = ["SAC", "Cobrança & Retenção", "Aquisição"] as const;
+
 const DIRECTUS_WEBHOOK_URL =
   process.env.NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL || "";
 
-export default function AnalystEvaluationFlowPage() {
+interface CallRecordingSlot {
+  id: string;
+  file: File | null;
+  previewUrl: string | null;
+  durationSeconds: number;
+  error: string | null;
+}
+
+function createEmptyRecordingSlot(): CallRecordingSlot {
+  return {
+    id: `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    file: null,
+    previewUrl: null,
+    durationSeconds: 180,
+    error: null,
+  };
+}
+
+function resolveTemplateForSector(
+  sectorName: string,
+  templates: FormTemplate[]
+): FormTemplate | null {
+  if (templates.length === 0) return null;
+  const s = (sectorName || "").toLowerCase();
+
+  if (s.includes("sac") || s.includes("suporte")) {
+    return (
+      templates.find((t) => t.name.toLowerCase().includes("monitoria sac")) ||
+      templates.find((t) => (t.sector || "").toLowerCase().includes("sac")) ||
+      templates[0]
+    );
+  }
+  if (s.includes("reten") || s.includes("cobran")) {
+    return (
+      templates.find(
+        (t) =>
+          t.name.toLowerCase().includes("monitoria retenção") ||
+          t.name.toLowerCase().includes("monitoria retencao")
+      ) ||
+      templates.find((t) => (t.sector || "").toLowerCase().includes("reten")) ||
+      templates[0]
+    );
+  }
+  return (
+    templates.find((t) => t.name.toLowerCase().includes("portabilidade")) ||
+    templates.find((t) =>
+      (t.sector || "").toLowerCase().includes("aquisi")
+    ) ||
+    templates[0]
+  );
+}
+
+function AnalystEvaluationFlowInner() {
   const params = useParams<{ id: string }>();
   const analystId = params.id;
+  const searchParams = useSearchParams();
+  const initialSectorParam = searchParams.get("sector") || "";
   const router = useRouter();
   const queryClient = useQueryClient();
   const { isGestor } = useAuth();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const returnFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [step, setStep] = useState<FlowStep>(1);
   const [flowError, setFlowError] = useState<string | null>(null);
 
-  // Etapa 1: Telefone_Portabilidade + Ticket / Datas (SAC & Retenção) + 13 Dados via POST Webhook
-  const [phoneInput, setPhoneInput] = useState("");
+  // Estado de Setor da Avaliação (Sincronizado com Analista e Formulário)
+  const [selectedSector, setSelectedSector] = useState<string>(
+    initialSectorParam || ""
+  );
+  const [isSwitchingSector, setIsSwitchingSector] = useState(false);
+  const initializedAnalystSectorRef = useRef(false);
+
+  // Campos Condicionais SAC / Retenção (Regra de Negócio: Ticket Zendesk + Data do Atendimento + Data da Monitoria)
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [ticketInput, setTicketInput] = useState("");
-  const [dataMonitoriaInput, setDataMonitoriaInput] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
-  const [dataAtendimentoInput, setDataAtendimentoInput] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
+  const [dataAtendimentoInput, setDataAtendimentoInput] = useState(todayIso);
+  const [dataMonitoriaInput, setDataMonitoriaInput] = useState(todayIso);
+
+  // Campos Padrão (Aquisição / Portabilidade: Telefone + 13 Campos de Venda)
+  const [phoneInput, setPhoneInput] = useState("");
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo | null>(null);
   const [webhookSource, setWebhookSource] = useState<string | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
   const lastLookedUpDigitsRef = useRef<string>("");
 
-  // Os 13 campos de Dados do Cliente / Venda
   const [saleDateInput, setSaleDateInput] = useState("");
   const [customerNameInput, setCustomerNameInput] = useState("");
   const [customerCpfInput, setCustomerCpfInput] = useState("");
@@ -89,23 +160,25 @@ export default function AnalystEvaluationFlowPage() {
   const [dueDateInput, setDueDateInput] = useState("");
   const [earlyPortabilityInput, setEarlyPortabilityInput] = useState("");
 
-  // Etapa 2: Audio_Ligacao / Audio_Chamada + Audio_Ligacao_Retorno
-  const [campaignInput, setCampaignInput] = useState("Monitoria_Qualidade");
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
-  const [detectedDuration, setDetectedDuration] = useState<number>(185);
-  const [returnAudioFile, setReturnAudioFile] = useState<File | null>(null);
-  const [returnPreviewUrl, setReturnPreviewUrl] = useState<string | null>(null);
-  const [returnDuration, setReturnDuration] = useState<number>(120);
+  // Etapa 2: Lista Dinâmica de Múltiplas Ligações (1, 2, 3 ou mais)
+  const [recordings, setRecordings] = useState<CallRecordingSlot[]>(() => [
+    createEmptyRecordingSlot(),
+  ]);
+  const recordingsRef = useRef<CallRecordingSlot[]>(recordings);
+  recordingsRef.current = recordings;
+
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
 
-  // Cleanup de Blob URLs ao desmontar componente (evita vazamento de memória)
+  // Cleanup de todos os Blob URLs ao desmontar componente (zero vazamento de memória)
   useEffect(() => {
     return () => {
-      if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl);
-      if (returnPreviewUrl) URL.revokeObjectURL(returnPreviewUrl);
+      recordingsRef.current.forEach((slot) => {
+        if (slot.previewUrl) {
+          URL.revokeObjectURL(slot.previewUrl);
+        }
+      });
     };
-  }, [localPreviewUrl, returnPreviewUrl]);
+  }, []);
 
   // Etapa 3: Avaliar (Portabilidade / SAC / Retenção)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
@@ -121,81 +194,20 @@ export default function AnalystEvaluationFlowPage() {
     null
   );
 
-  const { data: analyst } = useQuery({
+  const { data: analyst, isLoading: isAnalystLoading } = useQuery({
     queryKey: ["analyst-profile", analystId],
     queryFn: () => usersApi.getById(analystId),
     enabled: !!analystId && isGestor,
   });
 
-  const { data: existingTemplates = [] } = useQuery({
-    queryKey: ["active-forms"],
-    queryFn: () => formsApi.list(true),
-    enabled: isGestor,
-  });
+  const { data: existingTemplates = [], isLoading: isTemplatesLoading } =
+    useQuery({
+      queryKey: ["active-forms"],
+      queryFn: () => formsApi.list(true),
+      enabled: isGestor,
+    });
 
-  useEffect(() => {
-    if (existingTemplates.length === 0) return;
-    if (
-      selectedTemplateId &&
-      existingTemplates.some((t) => t.id === selectedTemplateId)
-    ) {
-      return;
-    }
-
-    const deptLower = (analyst?.department || "").toLowerCase();
-    let matched: FormTemplate | undefined;
-
-    if (deptLower.includes("sac") || deptLower.includes("suporte")) {
-      matched = existingTemplates.find((t) =>
-        t.name.toLowerCase().includes("monitoria sac")
-      );
-    } else if (
-      deptLower.includes("retenção") ||
-      deptLower.includes("retencao") ||
-      deptLower.includes("cobrança")
-    ) {
-      matched = existingTemplates.find(
-        (t) =>
-          t.name.toLowerCase().includes("monitoria retenção") ||
-          t.name.toLowerCase().includes("monitoria retencao")
-      );
-    } else if (
-      deptLower.includes("aquisição") ||
-      deptLower.includes("aquisicao")
-    ) {
-      matched = existingTemplates.find((t) =>
-        t.name.toLowerCase().includes("portabilidade")
-      );
-    }
-
-    const officialFallback =
-      existingTemplates.find((t) =>
-        t.name.toLowerCase().includes("portabilidade")
-      ) ||
-      existingTemplates.find((t) =>
-        t.name.toLowerCase().includes("monitoria sac")
-      ) ||
-      existingTemplates.find((t) =>
-        t.name.toLowerCase().includes("monitoria retenção")
-      ) ||
-      existingTemplates[0];
-
-    const chosen = matched || officialFallback;
-    if (chosen) {
-      handleSelectTemplate(chosen);
-    }
-  }, [analyst?.department, existingTemplates, selectedTemplateId]);
-
-  const activeFormForCall = useMemo<FormTemplate | null>(() => {
-    if (!selectedTemplateId) return existingTemplates[0] || null;
-    return (
-      existingTemplates.find((t) => t.id === selectedTemplateId) ||
-      existingTemplates[0] ||
-      null
-    );
-  }, [existingTemplates, selectedTemplateId]);
-
-  const handleSelectTemplate = (tpl: FormTemplate) => {
+  const applyTemplateSelection = useCallback((tpl: FormTemplate) => {
     setSelectedTemplateId(tpl.id);
     const initialChecks: Record<string, boolean> = {};
     tpl.items.forEach((item) => {
@@ -203,9 +215,139 @@ export default function AnalystEvaluationFlowPage() {
     });
     setCheckedMap(initialChecks);
     setObservationMap({});
-  };
+  }, []);
 
-  const applyCustomerFields = (cust: CustomerInfo) => {
+  // Inicializa o setor e o formulário correspondente assim que o perfil do analista e os templates carregarem
+  useEffect(() => {
+    if (existingTemplates.length === 0) return;
+
+    const resolvedInitialSector =
+      selectedSector || analyst?.department || initialSectorParam;
+    if (!resolvedInitialSector) return;
+
+    if (!initializedAnalystSectorRef.current) {
+      initializedAnalystSectorRef.current = true;
+      setSelectedSector(resolvedInitialSector);
+      const matched = resolveTemplateForSector(
+        resolvedInitialSector,
+        existingTemplates
+      );
+      if (matched) {
+        applyTemplateSelection(matched);
+      }
+    }
+  }, [
+    analyst?.department,
+    existingTemplates,
+    initialSectorParam,
+    selectedSector,
+    applyTemplateSelection,
+  ]);
+
+  // Determina se o setor atual exige os campos de SAC / Retenção
+  const isSacOrRetencao = useMemo(() => {
+    const s = (selectedSector || analyst?.department || "").toLowerCase();
+    return (
+      s.includes("sac") ||
+      s.includes("reten") ||
+      s.includes("cobran") ||
+      s.includes("suporte")
+    );
+  }, [selectedSector, analyst?.department]);
+
+  const resetCustomerFieldsForSectorSwitch = useCallback(
+    (nextSector: string) => {
+      const nextIsSacRet =
+        nextSector.toLowerCase().includes("sac") ||
+        nextSector.toLowerCase().includes("reten") ||
+        nextSector.toLowerCase().includes("cobran");
+      setFlowError(null);
+      if (nextIsSacRet) {
+        setPhoneInput("");
+        setCustomerInfo(null);
+        setWebhookSource(null);
+        lastLookedUpDigitsRef.current = "";
+        setSaleDateInput("");
+        setCustomerNameInput("");
+        setCustomerCpfInput("");
+        setBirthDateInput("");
+        setCustomerMotherInput("");
+        setContractedPlanInput("");
+        setProposalInput("");
+        setEmailInput("");
+        setPaymentMethodInput("");
+        setInvoiceTypeInput("");
+        setFullAddressInput("");
+        setDueDateInput("");
+        setEarlyPortabilityInput("");
+      } else {
+        setTicketInput("");
+        setDataAtendimentoInput(todayIso);
+        setDataMonitoriaInput(todayIso);
+      }
+    },
+    [todayIso]
+  );
+
+  // Handler de troca dinâmica de setor (sem travamentos, com feedback visual e atualização da matriz)
+  const handleSectorChange = useCallback(
+    async (newSector: string) => {
+      if (!newSector || newSector === selectedSector) return;
+      setIsSwitchingSector(true);
+      setSelectedSector(newSector);
+      resetCustomerFieldsForSectorSwitch(newSector);
+
+      const matchedTemplate = resolveTemplateForSector(
+        newSector,
+        existingTemplates
+      );
+      if (matchedTemplate) {
+        applyTemplateSelection(matchedTemplate);
+      }
+
+      try {
+        if (analystId) {
+          await usersApi.changeSector(analystId, {
+            newSector,
+            reason: "Troca de setor durante abertura de avaliação",
+          });
+          queryClient.invalidateQueries({
+            queryKey: ["analyst-profile", analystId],
+          });
+          queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+          queryClient.invalidateQueries({
+            queryKey: ["analysts-sidebar-list"],
+          });
+        }
+      } catch {
+        // Mesmo se o analista pertencer a outro gestor, mantém o formulário do setor escolhido ativo na avaliação
+      } finally {
+        setTimeout(() => setIsSwitchingSector(false), 180);
+      }
+    },
+    [
+      analystId,
+      applyTemplateSelection,
+      existingTemplates,
+      queryClient,
+      resetCustomerFieldsForSectorSwitch,
+      selectedSector,
+    ]
+  );
+
+  const activeFormForCall = useMemo<FormTemplate | null>(() => {
+    if (existingTemplates.length === 0) return null;
+    if (selectedTemplateId) {
+      const found = existingTemplates.find((t) => t.id === selectedTemplateId);
+      if (found) return found;
+    }
+    return resolveTemplateForSector(
+      selectedSector || analyst?.department || "SAC",
+      existingTemplates
+    );
+  }, [existingTemplates, selectedTemplateId, selectedSector, analyst?.department]);
+
+  const applyCustomerFields = useCallback((cust: CustomerInfo) => {
     setCustomerInfo(cust);
     setSaleDateInput(cust.saleDate || "");
     setCustomerNameInput(cust.name || "");
@@ -220,9 +362,8 @@ export default function AnalystEvaluationFlowPage() {
     setFullAddressInput(cust.fullAddress || "");
     setDueDateInput(cust.dueDate || "");
     setEarlyPortabilityInput(cust.earlyPortability || "");
-  };
+  }, []);
 
-  // Disparo POST para o Webhook configurado em NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL
   const pullContactFromWebhook = useCallback(
     async (rawPhone: string, force = false) => {
       const cleanDigits = extractCleanPhoneDigits(rawPhone);
@@ -251,11 +392,18 @@ export default function AnalystEvaluationFlowPage() {
         setLookupLoading(false);
       }
     },
-    [analystId, customerCpfInput, customerMotherInput, customerNameInput]
+    [
+      analystId,
+      applyCustomerFields,
+      customerCpfInput,
+      customerMotherInput,
+      customerNameInput,
+    ]
   );
 
-  // Auto-pull sempre que o usuário digitar/colar um telefone completo (10 ou 11 dígitos)
+  // Auto-pull por telefone apenas quando o setor NÃO for SAC/Retenção
   useEffect(() => {
+    if (isSacOrRetencao) return;
     const cleanDigits = extractCleanPhoneDigits(phoneInput);
     if (cleanDigits.length >= 10 && cleanDigits.length <= 11) {
       const timer = setTimeout(() => {
@@ -263,39 +411,55 @@ export default function AnalystEvaluationFlowPage() {
       }, 320);
       return () => clearTimeout(timer);
     }
-  }, [phoneInput, pullContactFromWebhook]);
+  }, [phoneInput, pullContactFromWebhook, isSacOrRetencao]);
 
   const handleProceedToStep2 = async (e: React.FormEvent) => {
     e.preventDefault();
     setFlowError(null);
+
+    if (isSacOrRetencao) {
+      if (!ticketInput.trim()) {
+        setFlowError(
+          "Informe o número do Ticket Zendesk para prosseguir com a avaliação de " +
+            (selectedSector || "SAC / Retenção") +
+            "."
+        );
+        return;
+      }
+      if (!dataAtendimentoInput) {
+        setFlowError("Informe a Data do Atendimento.");
+        return;
+      }
+      if (!dataMonitoriaInput) {
+        setFlowError("Informe a Data da Monitoria.");
+        return;
+      }
+      setStep(2);
+      return;
+    }
+
     const cleanDigits = extractCleanPhoneDigits(phoneInput);
-    if (cleanDigits.length < 8 && !ticketInput.trim()) {
+    if (cleanDigits.length < 8) {
       setFlowError(
-        "Informe um Telefone válido (ou número de Ticket) para prosseguir."
+        "Informe um Telefone válido (mínimo 8 dígitos) para prosseguir."
       );
       return;
     }
 
     setLookupLoading(true);
     try {
-      const keyToUse =
-        cleanDigits.length >= 8
-          ? cleanDigits
-          : ticketInput.trim().replace(/^#/, "") || "11999999999";
-
       let currentCustomer = customerInfo;
       if (
         !currentCustomer ||
-        (cleanDigits.length >= 8 &&
-          extractCleanPhoneDigits(currentCustomer.phone) !== cleanDigits)
+        extractCleanPhoneDigits(currentCustomer.phone) !== cleanDigits
       ) {
         const res = await customersApi.triggerWebhookLookup({
-          phone: keyToUse,
-          searchKey: keyToUse,
+          phone: cleanDigits,
+          searchKey: cleanDigits,
           cpf: customerCpfInput || undefined,
           motherName: customerMotherInput || undefined,
           name: customerNameInput || undefined,
-          keyType: cleanDigits.length >= 8 ? "TELEFONE" : "PROPOSTA",
+          keyType: "TELEFONE",
           analystId,
           webhookUrl: DIRECTUS_WEBHOOK_URL,
         });
@@ -336,56 +500,120 @@ export default function AnalystEvaluationFlowPage() {
     }
   };
 
-  const handleFileChange = (file: File | null) => {
-    if (!file) return;
-    setUploadedFile(file);
-    if (localPreviewUrl) {
-      URL.revokeObjectURL(localPreviewUrl);
-    }
-    const objUrl = URL.createObjectURL(file);
-    setLocalPreviewUrl(objUrl);
+  // Gerenciamento da Lista Dinâmica de Múltiplas Ligações (Passo 2)
+  const handleAddRecordingSlot = useCallback(() => {
+    setRecordings((prev) => [...prev, createEmptyRecordingSlot()]);
+  }, []);
 
-    const tempAudio = new Audio(objUrl);
-    tempAudio.addEventListener("loadedmetadata", () => {
-      if (tempAudio.duration && isFinite(tempAudio.duration)) {
-        setDetectedDuration(Math.max(1, Math.round(tempAudio.duration)));
+  const handleRemoveRecordingSlot = useCallback((slotId: string) => {
+    setRecordings((prev) => {
+      if (prev.length <= 1) return prev;
+      const target = prev.find((r) => r.id === slotId);
+      if (target?.previewUrl) {
+        URL.revokeObjectURL(target.previewUrl);
       }
+      return prev.filter((r) => r.id !== slotId);
     });
-  };
+  }, []);
 
-  const handleReturnFileChange = (file: File | null) => {
-    if (!file) return;
-    setReturnAudioFile(file);
-    if (returnPreviewUrl) {
-      URL.revokeObjectURL(returnPreviewUrl);
-    }
-    const objUrl = URL.createObjectURL(file);
-    setReturnPreviewUrl(objUrl);
+  const handleRecordingFileSelect = useCallback(
+    (slotId: string, file: File | null) => {
+      if (!file) return;
+      const objUrl = URL.createObjectURL(file);
 
-    const tempAudio = new Audio(objUrl);
-    tempAudio.addEventListener("loadedmetadata", () => {
-      if (tempAudio.duration && isFinite(tempAudio.duration)) {
-        setReturnDuration(Math.max(1, Math.round(tempAudio.duration)));
-      }
-    });
-  };
+      setRecordings((prev) =>
+        prev.map((slot) => {
+          if (slot.id !== slotId) return slot;
+          if (slot.previewUrl) {
+            URL.revokeObjectURL(slot.previewUrl);
+          }
+          return {
+            ...slot,
+            file,
+            previewUrl: objUrl,
+            error: null,
+          };
+        })
+      );
+
+      const tempAudio = new Audio(objUrl);
+      tempAudio.addEventListener("loadedmetadata", () => {
+        if (tempAudio.duration && isFinite(tempAudio.duration)) {
+          const detectedSecs = Math.max(1, Math.round(tempAudio.duration));
+          setRecordings((prev) =>
+            prev.map((slot) =>
+              slot.id === slotId
+                ? { ...slot, durationSeconds: detectedSecs }
+                : slot
+            )
+          );
+        }
+      });
+    },
+    []
+  );
 
   const uploadAttachmentMutation = useMutation({
     mutationFn: async () => {
       setFlowError(null);
-      return callsApi.uploadRecording({
-        file: uploadedFile,
-        analystId,
-        customerPhone:
-          extractCleanPhoneDigits(phoneInput) ||
+
+      // Validação individual de cada ligação adicionada na lista
+      let hasMissingFile = false;
+      setRecordings((prev) =>
+        prev.map((slot, idx) => {
+          if (!slot.file) {
+            hasMissingFile = true;
+            return {
+              ...slot,
+              error: `Anexe o arquivo de áudio da Ligação #${
+                idx + 1
+              } ou remova este item.`,
+            };
+          }
+          return { ...slot, error: null };
+        })
+      );
+
+      if (hasMissingFile) {
+        throw new Error(
+          "Todas as ligações adicionadas precisam ter um arquivo de áudio válido antes de avançar."
+        );
+      }
+
+      const validFiles = recordings.map((r) => r.file!);
+      const durationsList = recordings.map((r) => r.durationSeconds || 180);
+      const totalDuration = durationsList.reduce((acc, d) => acc + d, 0);
+
+      const resolvedPhoneKey = isSacOrRetencao
+        ? ticketInput.trim().replace(/^#/, "") || "11999999999"
+        : extractCleanPhoneDigits(phoneInput) ||
           phoneInput ||
           customerInfo?.phone ||
-          "11999999999",
-        customerName: customerNameInput,
-        campaign: ticketInput.trim()
-          ? `${campaignInput} • Ticket ${ticketInput.trim()}`
-          : campaignInput,
-        durationSeconds: detectedDuration,
+          "11999999999";
+
+      const resolvedCustomerName = isSacOrRetencao
+        ? `Ticket #${ticketInput.trim().replace(/^#/, "")}`
+        : customerNameInput;
+
+      const resolvedCampaign = isSacOrRetencao
+        ? `${selectedSector || "SAC"} • Ticket #${ticketInput
+            .trim()
+            .replace(/^#/, "")}`
+        : `${selectedSector || "Aquisição"} • Portabilidade`;
+
+      return callsApi.uploadRecording({
+        files: validFiles,
+        file: validFiles[0],
+        analystId,
+        customerPhone: resolvedPhoneKey,
+        customerName: resolvedCustomerName,
+        campaign: resolvedCampaign,
+        durationSeconds: totalDuration,
+        durations: durationsList,
+        ticket: isSacOrRetencao ? ticketInput.trim() : undefined,
+        attendanceDate: isSacOrRetencao ? dataAtendimentoInput : undefined,
+        monitoringDate: isSacOrRetencao ? dataMonitoriaInput : undefined,
+        sector: selectedSector || analyst?.department || "SAC",
       });
     },
     onSuccess: (createdCall) => {
@@ -425,45 +653,52 @@ export default function AnalystEvaluationFlowPage() {
         throw new Error("Chamada ou formulário não selecionado.");
       }
       const parts: string[] = [];
-      if (ticketInput.trim()) {
-        parts.push(`[Ticket]: ${ticketInput.trim()}`);
+      if (isSacOrRetencao && ticketInput.trim()) {
+        parts.push(`[Ticket Zendesk]: ${ticketInput.trim()}`);
+        parts.push(
+          `[Data do Atendimento]: ${dataAtendimentoInput} | [Data da Monitoria]: ${dataMonitoriaInput}`
+        );
+      } else if (!isSacOrRetencao && proposalInput.trim()) {
+        parts.push(`[Proposta]: ${proposalInput.trim()}`);
+      }
+      if (recordings.length > 1) {
+        parts.push(`[Ligações Anexadas]: ${recordings.length} gravações`);
       }
       if (generalFeedback.trim()) {
         parts.push(generalFeedback.trim());
       }
       if (pontosFortes.trim()) {
-        parts.push(`[Pontos_fortes]: ${pontosFortes.trim()}`);
+        parts.push(`Pontos Fortes: ${pontosFortes.trim()}`);
       }
       if (melhorias.trim()) {
-        parts.push(`[Melhorias]: ${melhorias.trim()}`);
+        parts.push(`Pontos de Melhoria: ${melhorias.trim()}`);
       }
-      if (liveScore.fatalTriggered) {
-        parts.push(
-          `[Motivo_falta_grave]: ${
-            motivoFaltaGrave.trim() || "Falta Grave acionada"
-          }`
-        );
+      if (
+        liveScore.fatalTriggered &&
+        motivoFaltaGrave.trim() &&
+        motivoFaltaGrave.trim() !== "N/A"
+      ) {
+        parts.push(`Motivo Falta Grave: ${motivoFaltaGrave.trim()}`);
       }
+
+      const answers = activeFormForCall.items.map((item) => ({
+        formItemId: item.id,
+        checked: !!checkedMap[item.id],
+        observation: observationMap[item.id] || undefined,
+      }));
 
       return evaluationsApi.submit({
         callRecordId: selectedCall.id,
         formTemplateId: activeFormForCall.id,
-        answers: activeFormForCall.items.map((item) => ({
-          formItemId: item.id,
-          checked: !!checkedMap[item.id],
-          observation:
-            item.fatalError && checkedMap[item.id]
-              ? motivoFaltaGrave || observationMap[item.id] || undefined
-              : observationMap[item.id] || undefined,
-        })),
-        generalFeedback: parts.join("\n\n"),
+        answers,
+        generalFeedback: parts.join("\n\n") || undefined,
       });
     },
-    onSuccess: (createdEvaluation) => {
+    onSuccess: (createdEval) => {
+      queryClient.invalidateQueries({ queryKey: ["evaluations-list"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
       queryClient.invalidateQueries({ queryKey: ["calls-list"] });
-      queryClient.invalidateQueries({ queryKey: ["evaluations-list"] });
-      router.push(`/evaluations/${createdEvaluation.id}`);
+      router.push(`/evaluations/${createdEval.id}`);
     },
     onError: (err) => {
       setFlowError(extractErrorMessage(err));
@@ -473,8 +708,8 @@ export default function AnalystEvaluationFlowPage() {
   if (!isGestor) {
     return (
       <AppShell>
-        <div className="p-6 rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-300 text-sm">
-          Acesso restrito ao perfil de Gestão.
+        <div className="p-6 rounded-xl border border-red-800 bg-red-950/40 text-red-200 text-xs">
+          Acesso restrito a Gestores e Administradores.
         </div>
       </AppShell>
     );
@@ -482,46 +717,61 @@ export default function AnalystEvaluationFlowPage() {
 
   return (
     <AppShell>
-      <div className="space-y-5 pb-16">
-        {/* Header Compacto */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-zinc-800/80">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => router.push("/analysts")}
-              aria-label="Voltar para analistas"
-              className="h-8 w-8 rounded-lg border border-zinc-800 bg-[#0b0b0d] flex items-center justify-center text-zinc-400 hover:text-zinc-100 transition-colors"
+      <div className="space-y-4 pb-16">
+        {/* Top Header Compacto + Seletor Dinâmico de Setor + Stepper */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-zinc-800/80">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <Link
+              href="/analysts"
+              className="p-2 rounded-lg border border-zinc-800 bg-[#0b0b0d] text-zinc-400 hover:text-zinc-100 transition-colors shrink-0"
+              title="Voltar para Analistas"
             >
               <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-base font-bold text-zinc-100">
-                {analyst ? analyst.name : "Operador"}
+            </Link>
+
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              <h1 className="text-base sm:text-lg font-bold text-zinc-100 truncate">
+                {analyst?.name || "Carregando Analista..."}
               </h1>
-              {analyst?.department && (
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
-                  {analyst.department}
+
+              {/* Seletor de Setor da Avaliação (Sincroniza Formulário e Campos do Cliente Instantaneamente) */}
+              <div className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-zinc-700 bg-[#121215]">
+                <UserCheck className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                <span className="text-[11px] font-mono text-zinc-400">
+                  Setor:
                 </span>
-              )}
+                <select
+                  value={selectedSector || analyst?.department || "SAC"}
+                  onChange={(e) => handleSectorChange(e.target.value)}
+                  disabled={isSwitchingSector}
+                  aria-label="Selecionar setor da avaliação"
+                  className="bg-transparent text-xs font-semibold text-zinc-100 focus:outline-none cursor-pointer"
+                >
+                  {AVAILABLE_SECTORS.map((sec) => (
+                    <option key={sec} value={sec} className="bg-[#0b0b0d]">
+                      {sec}
+                    </option>
+                  ))}
+                </select>
+                {isSwitchingSector && (
+                  <Loader2 className="h-3 w-3 animate-spin text-zinc-300" />
+                )}
+              </div>
+
               {activeFormForCall && (
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
-                  {activeFormForCall.name}
-                </span>
-              )}
-              {selectedCall && (
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
-                  #{selectedCall.externalCallId}
+                <span className="text-[11px] font-mono px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-300 truncate max-w-[260px]">
+                  Matriz: {activeFormForCall.name}
                 </span>
               )}
             </div>
           </div>
 
           {/* Stepper Enxuto */}
-          <div className="w-full sm:w-auto flex items-center gap-1 bg-[#0b0b0d] p-1 rounded-xl border border-zinc-800">
+          <div className="w-full sm:w-auto flex items-center gap-1 bg-[#0b0b0d] p-1 rounded-xl border border-zinc-800 shrink-0">
             {(
               [
-                { num: 1, label: "1. Cliente" },
-                { num: 2, label: "2. Áudio" },
+                { num: 1, label: "1. Dados do Cliente" },
+                { num: 2, label: `2. Ligações (${recordings.length})` },
                 { num: 3, label: "3. Avaliar" },
               ] as const
             ).map((s) => {
@@ -558,1093 +808,1171 @@ export default function AnalystEvaluationFlowPage() {
           </div>
         )}
 
-        <AnimatePresence mode="wait">
-          {/* ====================================================================
-              STEP 1: TELEFONE & 13 DADOS DO CLIENTE + METADADOS (TICKET / DATAS)
-             ==================================================================== */}
-          {step === 1 && (
-            <motion.div
-              key="step-1"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className="max-w-4xl p-5 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-5"
-            >
-              <form onSubmit={handleProceedToStep2} className="space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-zinc-800/80">
-                  <h2 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
-                    <User className="h-4 w-4 text-zinc-400" />
-                    <span>Dados do Cliente</span>
-                  </h2>
-
-                  {lookupLoading ? (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300">
-                      <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
-                      <span>Consultando...</span>
-                    </span>
-                  ) : webhookSource ? (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
-                      <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                      <span>Sincronizado</span>
-                    </span>
-                  ) : null}
-                </div>
-
-                {/* Campo Principal: Telefone */}
-                <div className="space-y-2 pb-2 border-b border-zinc-800/60">
-                  <label className="block text-xs font-medium text-zinc-300">
-                    Telefone
-                  </label>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <div className="relative flex-1">
-                      <Phone className="h-4 w-4 text-zinc-500 absolute left-3.5 top-3" />
-                      <input
-                        type="text"
-                        value={phoneInput}
-                        onChange={(e) =>
-                          setPhoneInput(formatPhoneMask(e.target.value))
-                        }
-                        placeholder="Digite o Telefone_Portabilidade ex: (11) 99999-9999"
-                        className="w-full h-10 pl-10 pr-4 rounded-lg border border-zinc-800 bg-[#121215] text-sm font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                      />
+        {/* Skeleton leve durante carregamento inicial ou troca de setor */}
+        {isAnalystLoading || isTemplatesLoading || isSwitchingSector ? (
+          <div className="max-w-4xl p-6 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-4">
+            <div className="flex items-center gap-2 text-xs font-mono text-zinc-400">
+              <Loader2 className="h-4 w-4 animate-spin text-zinc-200" />
+              <span>
+                Sincronizando estrutura do formulário para o setor{" "}
+                <strong className="text-zinc-100">
+                  {selectedSector || analyst?.department || "..."}
+                </strong>
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              {[1, 2, 3].map((n) => (
+                <div
+                  key={n}
+                  className="h-16 rounded-lg bg-zinc-900/70 border border-zinc-800/80 animate-pulse"
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <AnimatePresence mode="wait">
+            {/* ====================================================================
+                STEP 1: DADOS DO CLIENTE (CONDICIONAL POR SETOR: SAC/RETENÇÃO vs AQUISIÇÃO)
+               ==================================================================== */}
+            {step === 1 && (
+              <motion.div
+                key={`step-1-${isSacOrRetencao ? "sac-ret" : "aquisicao"}`}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18 }}
+                className="max-w-4xl p-5 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-5"
+              >
+                <form onSubmit={handleProceedToStep2} className="space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-zinc-800/80">
+                    <div className="flex items-center gap-2">
+                      <User className="h-4 w-4 text-zinc-400" />
+                      <h2 className="text-sm font-bold text-zinc-100">
+                        Dados do Cliente •{" "}
+                        <span className="text-zinc-300 font-mono">
+                          {selectedSector || analyst?.department || "SAC"}
+                        </span>
+                      </h2>
                     </div>
+
+                    {!isSacOrRetencao &&
+                      (lookupLoading ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300">
+                          <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
+                          <span>Consultando...</span>
+                        </span>
+                      ) : webhookSource ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
+                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                          <span>Sincronizado</span>
+                        </span>
+                      ) : null)}
+                  </div>
+
+                  {isSacOrRetencao ? (
+                    /* ==============================================================
+                       MODO SAC & RETENÇÃO: APENAS OS 3 CAMPOS OBRIGATÓRIOS DA REGRA
+                       1. Ticket Zendesk | 2. Data do Atendimento | 3. Data da Monitoria
+                       ============================================================== */
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 py-1">
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
+                          Ticket Zendesk *
+                        </label>
+                        <div className="relative">
+                          <Hash className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3" />
+                          <input
+                            type="text"
+                            required
+                            value={ticketInput}
+                            onChange={(e) => setTicketInput(e.target.value)}
+                            placeholder="Ex: 14705710"
+                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
+                          Data do Atendimento *
+                        </label>
+                        <div className="relative">
+                          <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3 pointer-events-none" />
+                          <input
+                            type="date"
+                            required
+                            value={dataAtendimentoInput}
+                            onChange={(e) =>
+                              setDataAtendimentoInput(e.target.value)
+                            }
+                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
+                          Data da Monitoria *
+                        </label>
+                        <div className="relative">
+                          <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3 pointer-events-none" />
+                          <input
+                            type="date"
+                            required
+                            value={dataMonitoriaInput}
+                            onChange={(e) =>
+                              setDataMonitoriaInput(e.target.value)
+                            }
+                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ==============================================================
+                       MODO AQUISIÇÃO / DEMAIS SETORES: TELEFONE + 13 CAMPOS DO CLIENTE
+                       ============================================================== */
+                    <>
+                      <div className="space-y-2 pb-3 border-b border-zinc-800/60">
+                        <label className="block text-xs font-medium text-zinc-300">
+                          Telefone *
+                        </label>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <div className="relative flex-1">
+                            <Phone className="h-4 w-4 text-zinc-500 absolute left-3.5 top-3" />
+                            <input
+                              type="text"
+                              value={phoneInput}
+                              onChange={(e) =>
+                                setPhoneInput(formatPhoneMask(e.target.value))
+                              }
+                              placeholder="Digite o Telefone_Portabilidade ex: (11) 99999-9999"
+                              className="w-full h-10 pl-10 pr-4 rounded-lg border border-zinc-800 bg-[#121215] text-sm font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            disabled={lookupLoading}
+                            onClick={() =>
+                              pullContactFromWebhook(phoneInput, true)
+                            }
+                            className="h-10 px-3.5 rounded-lg border border-zinc-800 bg-[#121215] hover:bg-zinc-900 text-xs font-medium text-zinc-200 inline-flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+                          >
+                            <RefreshCw
+                              className={`h-3.5 w-3.5 ${
+                                lookupLoading ? "animate-spin" : ""
+                              }`}
+                            />
+                            <span>Puxar Dados</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Data da Venda
+                          </label>
+                          <input
+                            type="text"
+                            value={saleDateInput}
+                            onChange={(e) => setSaleDateInput(e.target.value)}
+                            placeholder="DD/MM/AAAA"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Nome
+                          </label>
+                          <input
+                            type="text"
+                            value={customerNameInput}
+                            onChange={(e) =>
+                              setCustomerNameInput(e.target.value)
+                            }
+                            placeholder="Nome completo..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            CPF
+                          </label>
+                          <input
+                            type="text"
+                            value={customerCpfInput}
+                            onChange={(e) =>
+                              setCustomerCpfInput(e.target.value)
+                            }
+                            placeholder="000.000.000-00"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Data de Nascimento
+                          </label>
+                          <input
+                            type="text"
+                            value={birthDateInput}
+                            onChange={(e) => setBirthDateInput(e.target.value)}
+                            placeholder="DD/MM/AAAA"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Nome da Mãe
+                          </label>
+                          <input
+                            type="text"
+                            value={customerMotherInput}
+                            onChange={(e) =>
+                              setCustomerMotherInput(e.target.value)
+                            }
+                            placeholder="Nome da mãe..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Plano Contratado
+                          </label>
+                          <input
+                            type="text"
+                            value={contractedPlanInput}
+                            onChange={(e) =>
+                              setContractedPlanInput(e.target.value)
+                            }
+                            placeholder="Plano contratado..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Proposta
+                          </label>
+                          <input
+                            type="text"
+                            value={proposalInput}
+                            onChange={(e) => setProposalInput(e.target.value)}
+                            placeholder="Número da proposta..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            E-mail
+                          </label>
+                          <input
+                            type="text"
+                            value={emailInput}
+                            onChange={(e) => setEmailInput(e.target.value)}
+                            placeholder="email@exemplo.com"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Forma de Pagamento
+                          </label>
+                          <input
+                            type="text"
+                            value={paymentMethodInput}
+                            onChange={(e) =>
+                              setPaymentMethodInput(e.target.value)
+                            }
+                            placeholder="Forma de pagamento..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Tipo de Fatura
+                          </label>
+                          <input
+                            type="text"
+                            value={invoiceTypeInput}
+                            onChange={(e) =>
+                              setInvoiceTypeInput(e.target.value)
+                            }
+                            placeholder="Tipo de fatura..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Vencimento
+                          </label>
+                          <input
+                            type="text"
+                            value={dueDateInput}
+                            onChange={(e) => setDueDateInput(e.target.value)}
+                            placeholder="Dia de vencimento..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Portabilidade Antecipada
+                          </label>
+                          <input
+                            type="text"
+                            value={earlyPortabilityInput}
+                            onChange={(e) =>
+                              setEarlyPortabilityInput(e.target.value)
+                            }
+                            placeholder="Sim / Não"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-2 lg:col-span-3">
+                          <label className="block text-xs font-medium text-zinc-300 mb-1">
+                            Endereço Completo
+                          </label>
+                          <input
+                            type="text"
+                            value={fullAddressInput}
+                            onChange={(e) =>
+                              setFullAddressInput(e.target.value)
+                            }
+                            placeholder="Rua, número, bairro, cidade - UF, CEP..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="flex items-center justify-end pt-2 border-t border-zinc-800/80">
                     <button
-                      type="button"
+                      type="submit"
                       disabled={lookupLoading}
-                      onClick={() => pullContactFromWebhook(phoneInput, true)}
-                      className="h-10 px-3.5 rounded-lg border border-zinc-800 bg-[#121215] hover:bg-zinc-900 text-xs font-medium text-zinc-200 inline-flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+                      className="h-10 px-5 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 text-xs font-semibold inline-flex items-center justify-center gap-2 shrink-0 transition-colors"
                     >
-                      <RefreshCw
-                        className={`h-3.5 w-3.5 ${
-                          lookupLoading ? "animate-spin" : ""
-                        }`}
-                      />
-                      <span>Puxar Dados</span>
+                      <span>
+                        {lookupLoading
+                          ? "Consultando..."
+                          : "Continuar para Ligações"}
+                      </span>
+                      <ArrowRight className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                </div>
+                </form>
+              </motion.div>
+            )}
 
-                {/* Campos de Ticket e Datas (Monitoria_SAC & Monitoria_Retencao) */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pb-2 border-b border-zinc-800/60">
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Ticket (SAC / Retenção)
-                    </label>
-                    <input
-                      type="text"
-                      value={ticketInput}
-                      onChange={(e) => setTicketInput(e.target.value)}
-                      placeholder="Ex: #14648071"
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Data_monitoria
-                    </label>
-                    <input
-                      type="date"
-                      value={dataMonitoriaInput}
-                      onChange={(e) => setDataMonitoriaInput(e.target.value)}
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Data_do_Atendimento
-                    </label>
-                    <input
-                      type="date"
-                      value={dataAtendimentoInput}
-                      onChange={(e) => setDataAtendimentoInput(e.target.value)}
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-                </div>
-
-                {/* Os 13 Campos de Dados Preenchidos Automaticamente pelo Webhook POST */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Data Da Venda
-                    </label>
-                    <input
-                      type="text"
-                      value={saleDateInput}
-                      onChange={(e) => setSaleDateInput(e.target.value)}
-                      placeholder="DD/MM/AAAA"
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Nome
-                    </label>
-                    <input
-                      type="text"
-                      value={customerNameInput}
-                      onChange={(e) => setCustomerNameInput(e.target.value)}
-                      placeholder="Nome completo..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Cpf
-                    </label>
-                    <input
-                      type="text"
-                      value={customerCpfInput}
-                      onChange={(e) => setCustomerCpfInput(e.target.value)}
-                      placeholder="000.000.000-00"
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Data De Nascimento
-                    </label>
-                    <input
-                      type="text"
-                      value={birthDateInput}
-                      onChange={(e) => setBirthDateInput(e.target.value)}
-                      placeholder="DD/MM/AAAA"
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Nome Da Mae
-                    </label>
-                    <input
-                      type="text"
-                      value={customerMotherInput}
-                      onChange={(e) => setCustomerMotherInput(e.target.value)}
-                      placeholder="Nome da mãe..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Plano Contratado
-                    </label>
-                    <input
-                      type="text"
-                      value={contractedPlanInput}
-                      onChange={(e) => setContractedPlanInput(e.target.value)}
-                      placeholder="Plano contratado..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Proposta
-                    </label>
-                    <input
-                      type="text"
-                      value={proposalInput}
-                      onChange={(e) => setProposalInput(e.target.value)}
-                      placeholder="Número da proposta..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Email
-                    </label>
-                    <input
-                      type="text"
-                      value={emailInput}
-                      onChange={(e) => setEmailInput(e.target.value)}
-                      placeholder="email@exemplo.com"
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Forma De Pagamento
-                    </label>
-                    <input
-                      type="text"
-                      value={paymentMethodInput}
-                      onChange={(e) => setPaymentMethodInput(e.target.value)}
-                      placeholder="Forma de pagamento..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Tipo De Fatura
-                    </label>
-                    <input
-                      type="text"
-                      value={invoiceTypeInput}
-                      onChange={(e) => setInvoiceTypeInput(e.target.value)}
-                      placeholder="Tipo de fatura..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Vencimento
-                    </label>
-                    <input
-                      type="text"
-                      value={dueDateInput}
-                      onChange={(e) => setDueDateInput(e.target.value)}
-                      placeholder="Dia de vencimento..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Portabilidade Antecipada
-                    </label>
-                    <input
-                      type="text"
-                      value={earlyPortabilityInput}
-                      onChange={(e) => setEarlyPortabilityInput(e.target.value)}
-                      placeholder="Sim / Não"
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2 lg:col-span-3">
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Endereco Completo
-                    </label>
-                    <input
-                      type="text"
-                      value={fullAddressInput}
-                      onChange={(e) => setFullAddressInput(e.target.value)}
-                      placeholder="Rua, número, bairro, cidade - UF, CEP..."
-                      className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end pt-2 border-t border-zinc-800/80">
-                  <button
-                    type="submit"
-                    disabled={lookupLoading}
-                    className="h-10 px-5 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 text-xs font-semibold inline-flex items-center justify-center gap-2 shrink-0 transition-colors"
-                  >
-                    <span>
-                      {lookupLoading ? "Consultando..." : "Continuar para Áudio"}
-                    </span>
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          )}
-
-          {/* ====================================================================
-              STEP 2: ANEXAR ÁUDIO (Audio_Ligacao + Audio_Ligacao_Retorno)
-             ==================================================================== */}
-          {step === 2 && (
-            <motion.div
-              key="step-2"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className="max-w-3xl p-5 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-5"
-            >
-              {/* Resumo dos Dados puxados pelo Webhook */}
-              <div className="p-3.5 rounded-xl border border-zinc-800 bg-[#121215] grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                <div>
-                  <span className="text-[10px] font-mono text-zinc-500 block">
-                    Telefone / Ticket
-                  </span>
-                  <span className="font-mono text-zinc-100 font-medium truncate block">
-                    {extractCleanPhoneDigits(phoneInput) ||
-                      ticketInput ||
-                      phoneInput}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-zinc-500 block">
-                    Nome
-                  </span>
-                  <span className="text-zinc-100 font-medium truncate block">
-                    {customerNameInput || "-"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-zinc-500 block">
-                    Cpf
-                  </span>
-                  <span className="font-mono text-zinc-100 truncate block">
-                    {customerCpfInput || "-"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-zinc-500 block">
-                    Proposta / Data Venda
-                  </span>
-                  <span className="font-mono text-zinc-200 truncate block">
-                    {proposalInput || "-"} • {saleDateInput || "-"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Cliente
-                  </label>
-                  <input
-                    type="text"
-                    value={customerNameInput}
-                    onChange={(e) => setCustomerNameInput(e.target.value)}
-                    className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Coleção / Campanha
-                  </label>
-                  <input
-                    type="text"
-                    value={campaignInput}
-                    onChange={(e) => setCampaignInput(e.target.value)}
-                    className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                  />
-                </div>
-              </div>
-
-              {/* Audio_Ligacao (Principal) & Audio_Ligacao_Retorno (Opcional) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <span className="block text-xs font-mono text-zinc-300">
-                    Audio_Ligacao / Audio_Chamada (Principal) *
-                  </span>
-                  <div
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                        handleFileChange(e.dataTransfer.files[0]);
-                      }
-                    }}
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`p-5 rounded-xl border border-dashed cursor-pointer transition-all flex flex-col items-center justify-center text-center gap-2 ${
-                      uploadedFile
-                        ? "border-zinc-500 bg-[#141418]"
-                        : "border-zinc-800 hover:border-zinc-600 bg-[#121215]"
-                    }`}
-                  >
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm"
-                      className="hidden"
-                      onChange={(e) =>
-                        handleFileChange(
-                          e.target.files && e.target.files[0]
-                            ? e.target.files[0]
-                            : null
-                        )
-                      }
-                    />
-                    <div className="h-9 w-9 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-                      {uploadedFile ? (
-                        <FileAudio className="h-4 w-4 text-zinc-100" />
-                      ) : (
-                        <UploadCloud className="h-4 w-4 text-zinc-400" />
-                      )}
-                    </div>
-                    {uploadedFile ? (
-                      <div>
-                        <p className="text-xs font-semibold text-zinc-100 truncate max-w-[200px]">
-                          {uploadedFile.name}
-                        </p>
-                        <p className="text-[11px] text-zinc-500 font-mono">
-                          {(uploadedFile.size / 1024).toFixed(1)} KB •{" "}
-                          {formatDuration(detectedDuration)}
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-xs font-medium text-zinc-300">
-                        Anexar Audio_Ligacao (MP3, WAV, OGG)
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <span className="block text-xs font-mono text-zinc-400">
-                    Audio_Ligacao_Retorno (Opcional)
-                  </span>
-                  <div
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                        handleReturnFileChange(e.dataTransfer.files[0]);
-                      }
-                    }}
-                    onClick={() => returnFileInputRef.current?.click()}
-                    className={`p-5 rounded-xl border border-dashed cursor-pointer transition-all flex flex-col items-center justify-center text-center gap-2 ${
-                      returnAudioFile
-                        ? "border-zinc-500 bg-[#141418]"
-                        : "border-zinc-800 hover:border-zinc-600 bg-[#121215]"
-                    }`}
-                  >
-                    <input
-                      ref={returnFileInputRef}
-                      type="file"
-                      accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm"
-                      className="hidden"
-                      onChange={(e) =>
-                        handleReturnFileChange(
-                          e.target.files && e.target.files[0]
-                            ? e.target.files[0]
-                            : null
-                        )
-                      }
-                    />
-                    <div className="h-9 w-9 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-                      {returnAudioFile ? (
-                        <FileAudio className="h-4 w-4 text-zinc-100" />
-                      ) : (
-                        <UploadCloud className="h-4 w-4 text-zinc-500" />
-                      )}
-                    </div>
-                    {returnAudioFile ? (
-                      <div>
-                        <p className="text-xs font-semibold text-zinc-100 truncate max-w-[200px]">
-                          {returnAudioFile.name}
-                        </p>
-                        <p className="text-[11px] text-zinc-500 font-mono">
-                          {(returnAudioFile.size / 1024).toFixed(1)} KB •{" "}
-                          {formatDuration(returnDuration)}
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-xs font-medium text-zinc-400">
-                        Anexar Audio_Ligacao_Retorno (se houver)
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {localPreviewUrl && (
-                <CallAudioPlayer
-                  audioUrl={localPreviewUrl}
-                  externalCallId={uploadedFile?.name || "Audio_Ligacao"}
-                  durationSeconds={detectedDuration}
-                />
-              )}
-
-              {returnPreviewUrl && (
-                <CallAudioPlayer
-                  audioUrl={returnPreviewUrl}
-                  externalCallId={
-                    returnAudioFile?.name || "Audio_Ligacao_Retorno"
-                  }
-                  durationSeconds={returnDuration}
-                />
-              )}
-
-              <div className="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="h-9 px-4 rounded-lg border border-zinc-800 text-xs text-zinc-400 hover:text-zinc-100"
-                >
-                  Voltar
-                </button>
-                <button
-                  type="button"
-                  disabled={uploadAttachmentMutation.isPending}
-                  onClick={() => uploadAttachmentMutation.mutate()}
-                  className="h-9 px-5 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 text-xs font-semibold inline-flex items-center gap-2"
-                >
-                  <Headphones className="h-3.5 w-3.5" />
-                  <span>
-                    {uploadAttachmentMutation.isPending
-                      ? "Carregando..."
-                      : "Ir para Avaliação"}
-                  </span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </motion.div>
-          )}
-
-          {/* ====================================================================
-              STEP 3: FORMULÁRIO DE MONITORIA (PORTABILIDADE / SAC / RETENÇÃO)
-             ==================================================================== */}
-          {step === 3 && selectedCall && activeFormForCall && (
-            <motion.div
-              key="step-3"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              className="space-y-5"
-            >
-              {/* Card com os 13 Dados do Cliente para Conferência na Auditoria */}
-              <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-zinc-200 uppercase font-mono">
-                      Dados • Telefone:{" "}
-                      {extractCleanPhoneDigits(phoneInput) ||
-                        selectedCall.customerIdentifier}
-                    </span>
-                    {ticketInput && (
-                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
-                        Ticket: {ticketInput}
+            {/* ====================================================================
+                STEP 2: ADICIONAR LIGAÇÕES (LISTA DINÂMICA DE 1, 2, 3 OU MAIS ÁUDIOS)
+               ==================================================================== */}
+            {step === 2 && (
+              <motion.div
+                key="step-2"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18 }}
+                className="max-w-3xl p-5 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-5"
+              >
+                {/* Resumo Contextual da Etapa 1 */}
+                {isSacOrRetencao ? (
+                  <div className="p-3.5 rounded-xl border border-zinc-800 bg-[#121215] grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                    <div>
+                      <span className="text-[10px] font-mono text-zinc-500 block">
+                        Ticket Zendesk
                       </span>
-                    )}
+                      <span className="font-mono text-zinc-100 font-semibold truncate block">
+                        #{ticketInput.replace(/^#/, "")}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-mono text-zinc-500 block">
+                        Data do Atendimento
+                      </span>
+                      <span className="font-mono text-zinc-100 truncate block">
+                        {dataAtendimentoInput}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-mono text-zinc-500 block">
+                        Data da Monitoria
+                      </span>
+                      <span className="font-mono text-zinc-100 truncate block">
+                        {dataMonitoriaInput}
+                      </span>
+                    </div>
                   </div>
-                  {webhookSource && (
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/40 text-emerald-300 border border-emerald-800/70">
-                      {webhookSource}
-                    </span>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 text-xs">
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Data Da Venda
-                    </span>
-                    <span className="font-mono text-zinc-100 font-medium block truncate">
-                      {saleDateInput || "-"}
-                    </span>
+                ) : (
+                  <div className="p-3.5 rounded-xl border border-zinc-800 bg-[#121215] grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                    <div>
+                      <span className="text-[10px] font-mono text-zinc-500 block">
+                        Telefone
+                      </span>
+                      <span className="font-mono text-zinc-100 font-medium truncate block">
+                        {extractCleanPhoneDigits(phoneInput) || phoneInput}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-mono text-zinc-500 block">
+                        Nome
+                      </span>
+                      <span className="text-zinc-100 font-medium truncate block">
+                        {customerNameInput || "-"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-mono text-zinc-500 block">
+                        CPF
+                      </span>
+                      <span className="font-mono text-zinc-100 truncate block">
+                        {customerCpfInput || "-"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-mono text-zinc-500 block">
+                        Proposta / Data Venda
+                      </span>
+                      <span className="font-mono text-zinc-200 truncate block">
+                        {proposalInput || "-"} • {saleDateInput || "-"}
+                      </span>
+                    </div>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Nome
-                    </span>
-                    <span className="text-zinc-100 font-medium block truncate">
-                      {customerNameInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Cpf
-                    </span>
-                    <span className="font-mono text-zinc-100 font-medium block truncate">
-                      {customerCpfInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Data De Nascimento
-                    </span>
-                    <span className="font-mono text-zinc-100 font-medium block truncate">
-                      {birthDateInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Nome Da Mae
-                    </span>
-                    <span className="text-zinc-100 font-medium block truncate">
-                      {customerMotherInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Plano Contratado
-                    </span>
-                    <span className="text-zinc-100 font-medium block truncate">
-                      {contractedPlanInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Proposta
-                    </span>
-                    <span className="font-mono text-zinc-100 font-medium block truncate">
-                      {proposalInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Email
-                    </span>
-                    <span className="font-mono text-zinc-100 font-medium block truncate">
-                      {emailInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Forma De Pagamento
-                    </span>
-                    <span className="text-zinc-100 font-medium block truncate">
-                      {paymentMethodInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Tipo De Fatura
-                    </span>
-                    <span className="text-zinc-100 font-medium block truncate">
-                      {invoiceTypeInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Vencimento
-                    </span>
-                    <span className="text-zinc-100 font-medium block truncate">
-                      {dueDateInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Portabilidade Antecipada
-                    </span>
-                    <span className="text-zinc-100 font-medium block truncate">
-                      {earlyPortabilityInput || "-"}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80 col-span-2 sm:col-span-3 lg:col-span-4">
-                    <span className="text-[10px] font-mono text-zinc-500 block">
-                      Endereco Completo
-                    </span>
-                    <span className="text-zinc-100 font-medium block">
-                      {fullAddressInput || "-"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Barra Unificada: Seletor de Formulário (Portabilidade / SAC / Retenção) + Player de Áudio */}
-              <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3.5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  {/* Seletor de Formulário Compacto */}
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <FolderKanban className="h-4 w-4 text-zinc-400 shrink-0" />
-                    <select
-                      value={activeFormForCall.id}
-                      onChange={(e) => {
-                        const tpl = existingTemplates.find(
-                          (t) => t.id === e.target.value
-                        );
-                        if (tpl) handleSelectTemplate(tpl);
-                      }}
-                      aria-label="Selecionar formulário"
-                      className="h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-medium text-zinc-100 focus:outline-none focus:border-zinc-600 max-w-md w-full truncate"
-                    >
-                      {existingTemplates.map((tpl) => (
-                        <option key={tpl.id} value={tpl.id}>
-                          {tpl.name} ({tpl.sector || "Geral"} •{" "}
-                          {tpl.maxPossiblePoints} pts)
-                        </option>
-                      ))}
-                    </select>
-
-                    <Link
-                      href="/forms"
-                      className="h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] hover:bg-zinc-900 text-xs text-zinc-300 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-                    >
-                      <span>Editar Formulários</span>
-                    </Link>
-                  </div>
-
-                  {/* Nota_Final Compacta */}
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    <span className="text-xs font-mono text-zinc-400">
-                      Nota_Final: {liveScore.obtainedPoints}/
-                      {liveScore.maxPossiblePoints} pts
-                    </span>
-                    <span
-                      className={`px-2.5 py-1 rounded-md text-xs font-mono font-bold border ${
-                        liveScore.status === "APROVADO"
-                          ? "bg-emerald-950/50 text-emerald-300 border-emerald-800/80"
-                          : liveScore.status === "ZERADO_ERRO_GRAVE"
-                          ? "bg-red-950/70 text-red-200 border-red-800"
-                          : "bg-zinc-900 text-zinc-200 border-zinc-800"
-                      }`}
-                    >
-                      {liveScore.finalPercentage.toFixed(0)}
-                    </span>
-                  </div>
-                </div>
-
-                <CallAudioPlayer
-                  audioUrl={localPreviewUrl || selectedCall.audioUrl}
-                  externalCallId={`Audio_Ligacao • ${selectedCall.externalCallId}`}
-                  durationSeconds={selectedCall.durationSeconds}
-                />
-
-                {returnPreviewUrl && (
-                  <CallAudioPlayer
-                    audioUrl={returnPreviewUrl}
-                    externalCallId={`Audio_Ligacao_Retorno • ${
-                      returnAudioFile?.name || "retorno"
-                    }`}
-                    durationSeconds={returnDuration}
-                  />
                 )}
-              </div>
 
-              {/* Grid Principal: Critérios à Esquerda + Resumo Nota_Final à Direita */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                <div className="lg:col-span-8 space-y-5">
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-mono uppercase tracking-wider text-zinc-400">
-                        Critérios ({standardItems.length}) •{" "}
-                        {activeFormForCall.name}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const allChecked = standardItems.every(
-                            (i) => checkedMap[i.id]
-                          );
-                          const next = { ...checkedMap };
-                          standardItems.forEach((i) => {
-                            next[i.id] = !allChecked;
-                          });
-                          setCheckedMap(next);
-                        }}
-                        className="text-[11px] font-mono text-zinc-400 hover:text-zinc-100"
-                      >
-                        Alternar todos
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      {standardItems.map((item) => {
-                        const isChecked = !!checkedMap[item.id];
-                        const noteOpen = expandedNoteItemId === item.id;
-
-                        return (
-                          <div
-                            key={item.id}
-                            className={`rounded-xl border transition-all p-3.5 flex flex-col gap-2 ${
-                              isChecked
-                                ? "border-zinc-600 bg-[#141418]"
-                                : "border-amber-900/50 bg-[#0b0b0d] hover:border-zinc-700"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <label className="flex items-center gap-3 cursor-pointer flex-1 select-none min-w-0">
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={(e) =>
-                                    setCheckedMap((prev) => ({
-                                      ...prev,
-                                      [item.id]: e.target.checked,
-                                    }))
-                                  }
-                                  className="h-4 w-4 rounded border-zinc-600 text-zinc-100 focus:ring-0 cursor-pointer shrink-0"
-                                />
-                                <div className="min-w-0">
-                                  <span className="text-[10px] font-mono text-zinc-500 block">
-                                    {item.category}
-                                  </span>
-                                  <span className="text-xs font-medium text-zinc-100 leading-snug block">
-                                    {item.label}
-                                  </span>
-                                </div>
-                              </label>
-
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span
-                                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold whitespace-nowrap ${
-                                    isChecked
-                                      ? "bg-zinc-100 text-zinc-950"
-                                      : "bg-red-950/60 text-red-300 border border-red-900/60"
-                                  }`}
-                                >
-                                  {isChecked
-                                    ? `${item.points || 1} pts`
-                                    : `0 / ${item.points || 1} pts`}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setExpandedNoteItemId(
-                                      noteOpen ? null : item.id
-                                    )
-                                  }
-                                  className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300"
-                                >
-                                  Obs
-                                </button>
-                              </div>
-                            </div>
-
-                            {(noteOpen || observationMap[item.id]) && (
-                              <input
-                                type="text"
-                                value={observationMap[item.id] || ""}
-                                onChange={(e) =>
-                                  setObservationMap((prev) => ({
-                                    ...prev,
-                                    [item.id]: e.target.value,
-                                  }))
-                                }
-                                placeholder="Observação específica deste critério..."
-                                className="w-full h-8 px-2.5 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-200 focus:outline-none focus:border-zinc-600"
-                              />
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Falta_Grave / falta_grave & Motivo_falta_grave */}
-                  {fatalItems.length > 0 && (
-                    <div className="space-y-2.5 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-mono uppercase tracking-wider text-red-400/90 flex items-center gap-1.5">
-                          <ShieldAlert className="h-3.5 w-3.5" />
-                          <span>Falta_Grave (Zera Nota_Final = 0)</span>
-                        </span>
-                        <span className="text-[11px] font-mono text-zinc-400">
-                          falta_grave:{" "}
-                          <strong
-                            className={
-                              liveScore.fatalTriggered
-                                ? "text-red-400"
-                                : "text-emerald-400"
-                            }
-                          >
-                            {liveScore.fatalTriggered ? "true" : "false"}
-                          </strong>
-                        </span>
-                      </div>
-
-                      <div className="space-y-2">
-                        {fatalItems.map((item) => {
-                          const isViolated = !!checkedMap[item.id];
-                          return (
-                            <div
-                              key={item.id}
-                              className={`rounded-xl border transition-all p-3.5 ${
-                                isViolated
-                                  ? "border-red-600 bg-red-950/30"
-                                  : "border-zinc-800/90 bg-[#121215] hover:border-red-900/60"
-                              }`}
-                            >
-                              <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <input
-                                    type="checkbox"
-                                    checked={isViolated}
-                                    onChange={(e) => {
-                                      const checked = e.target.checked;
-                                      setCheckedMap((prev) => ({
-                                        ...prev,
-                                        [item.id]: checked,
-                                      }));
-                                      if (checked && motivoFaltaGrave === "N/A") {
-                                        setMotivoFaltaGrave("");
-                                      } else if (!checked) {
-                                        setMotivoFaltaGrave("N/A");
-                                      }
-                                    }}
-                                    className="h-4 w-4 rounded border-zinc-600 text-red-600 focus:ring-0 cursor-pointer shrink-0"
-                                  />
-                                  <span className="text-xs font-medium text-zinc-100 leading-snug">
-                                    {item.label}
-                                  </span>
-                                </div>
-                                <span
-                                  className={`px-2 py-0.5 rounded text-[10px] font-mono shrink-0 ${
-                                    isViolated
-                                      ? "bg-red-600 text-white font-bold"
-                                      : "bg-zinc-900 text-zinc-500 border border-zinc-800"
-                                  }`}
-                                >
-                                  {isViolated ? "FALTA GRAVE" : "Inativo"}
-                                </span>
-                              </label>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="pt-1">
-                        <label className="block text-xs font-mono text-zinc-300 mb-1">
-                          Motivo_falta_grave
-                        </label>
-                        <input
-                          type="text"
-                          value={motivoFaltaGrave}
-                          onChange={(e) => setMotivoFaltaGrave(e.target.value)}
-                          placeholder="Ex: [00:08] Cliente divergente; [03:38] CPF divergente do registrado na venda"
-                          className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Observacoes / Breve_resumo_do_atendimento + Pontos_fortes + Melhorias */}
-                  <div className="space-y-3 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <label className="block text-xs font-mono uppercase tracking-wider text-zinc-300">
-                        Observacoes / Breve_resumo_do_atendimento
-                      </label>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {[
-                          "Possui vício de linguagem (né / tá / aí). ",
-                          "Não menciona os canais digitais da administradora. ",
-                          "Não solicita confirmação de CPF/e-mail/telefone secundário. ",
-                          "[01:00] Não informou franquia de 550 minutos; ",
-                          "[04:20] Não ofertou opção de eSIM (*#06#); ",
-                        ].map((snippet) => (
-                          <button
-                            key={snippet}
-                            type="button"
-                            onClick={() =>
-                              setGeneralFeedback((prev) =>
-                                prev ? `${prev}\n${snippet}` : snippet
-                              )
-                            }
-                            className="px-2 py-0.5 rounded border border-zinc-800 bg-[#121215] hover:border-zinc-600 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
-                          >
-                            <Clock className="h-2.5 w-2.5" />
-                            <span>{snippet.slice(0, 26)}...</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <textarea
-                      rows={5}
-                      value={generalFeedback}
-                      onChange={(e) => setGeneralFeedback(e.target.value)}
-                      placeholder="Breve resumo do atendimento / Observações da monitoria..."
-                      className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                    />
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <div>
-                        <label className="block text-xs font-mono text-zinc-400 mb-1">
-                          Pontos_fortes (Opcional)
-                        </label>
-                        <input
-                          type="text"
-                          value={pontosFortes}
-                          onChange={(e) => setPontosFortes(e.target.value)}
-                          placeholder="Pontos fortes identificados..."
-                          className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-mono text-zinc-400 mb-1">
-                          Melhorias (Opcional)
-                        </label>
-                        <input
-                          type="text"
-                          value={melhorias}
-                          onChange={(e) => setMelhorias(e.target.value)}
-                          placeholder="Oportunidades de melhoria..."
-                          className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Painel Direito: Nota_Final e Salvar */}
-                <div className="lg:col-span-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 space-y-4">
-                  <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-                    <span className="text-xs font-semibold text-zinc-200 font-mono">
-                      Nota_Final
-                    </span>
-                    <span className="text-xs font-mono text-zinc-500">
-                      Meta:{" "}
-                      {Number(
-                        activeFormForCall.passingScorePercentage
-                      ).toFixed(0)}
-                      %
-                    </span>
-                  </div>
-
-                  {liveScore.fatalTriggered && (
-                    <div className="p-3 rounded-lg bg-red-950/60 border border-red-800 text-red-200 text-xs flex items-center gap-2">
-                      <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
-                      <span>falta_grave = true (Nota Zerada)</span>
-                    </div>
-                  )}
-
-                  <div className="py-5 text-center rounded-xl border border-zinc-800 bg-[#121215]">
-                    <p className="text-4xl font-bold tracking-tight text-zinc-50 font-mono">
-                      {liveScore.finalPercentage.toFixed(0)}
+                {/* Cabeçalho da Lista Dinâmica de Ligações */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-zinc-800/80">
+                  <div>
+                    <h2 className="text-sm font-bold text-zinc-100">
+                      Gravações da Avaliação ({recordings.length})
+                    </h2>
+                    <p className="text-[11px] text-zinc-400">
+                      Adicione uma ou mais ligações vinculadas a este
+                      atendimento
                     </p>
-                    <p className="text-xs text-zinc-400 font-mono mt-1.5">
-                      {liveScore.obtainedPoints} / {liveScore.maxPossiblePoints}{" "}
-                      pts ({liveScore.finalPercentage.toFixed(1)}%)
-                    </p>
-                  </div>
-
-                  <div className="p-3 rounded-lg border border-zinc-800/80 bg-[#121215] space-y-1.5 text-[11px] font-mono">
-                    <div className="flex justify-between">
-                      <span className="text-zinc-500">Formulário:</span>
-                      <span className="text-zinc-200 truncate max-w-[160px]">
-                        {activeFormForCall.name}
-                      </span>
-                    </div>
-                    {ticketInput && (
-                      <div className="flex justify-between">
-                        <span className="text-zinc-500">Ticket:</span>
-                        <span className="text-zinc-200">{ticketInput}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between">
-                      <span className="text-zinc-500">Telefone:</span>
-                      <span className="text-zinc-200">
-                        {extractCleanPhoneDigits(phoneInput) ||
-                          selectedCall.customerIdentifier}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-500">falta_grave:</span>
-                      <span
-                        className={
-                          liveScore.fatalTriggered
-                            ? "text-red-400 font-bold"
-                            : "text-emerald-400"
-                        }
-                      >
-                        {liveScore.fatalTriggered ? "true" : "false"}
-                      </span>
-                    </div>
                   </div>
 
                   <button
                     type="button"
-                    disabled={submitEvaluationMutation.isPending}
-                    onClick={() => submitEvaluationMutation.mutate()}
-                    className="w-full h-10 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
+                    onClick={handleAddRecordingSlot}
+                    className="h-8 px-3 rounded-lg border border-zinc-700 bg-[#141418] hover:bg-zinc-800 text-xs font-semibold text-zinc-100 inline-flex items-center gap-1.5 transition-colors"
                   >
-                    <FileCheck2 className="h-4 w-4" />
-                    <span>
-                      {submitEvaluationMutation.isPending
-                        ? "Salvando..."
-                        : "Publicar Monitoria"}
-                    </span>
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>+ Adicionar outra ligação</span>
                   </button>
                 </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
+                {/* Array Dinâmico de Ligações */}
+                <div className="space-y-3.5">
+                  {recordings.map((slot, index) => (
+                    <div
+                      key={slot.id}
+                      className={`p-4 rounded-xl border transition-colors space-y-3 ${
+                        slot.error
+                          ? "border-red-700/80 bg-red-950/15"
+                          : "border-zinc-800 bg-[#121215]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-mono font-semibold text-zinc-200">
+                          Ligação #{index + 1}{" "}
+                          {index === 0 ? "(Principal)" : `(Adicional)`} *
+                        </span>
+
+                        {recordings.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRecordingSlot(slot.id)}
+                            className="h-7 px-2.5 rounded-md border border-zinc-800 bg-[#0b0b0d] hover:border-red-900/70 hover:bg-red-950/40 text-[11px] font-medium text-zinc-400 hover:text-red-300 inline-flex items-center gap-1 transition-colors"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            <span>Remover</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <label
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (
+                            e.dataTransfer.files &&
+                            e.dataTransfer.files[0]
+                          ) {
+                            handleRecordingFileSelect(
+                              slot.id,
+                              e.dataTransfer.files[0]
+                            );
+                          }
+                        }}
+                        className={`p-4 rounded-xl border border-dashed cursor-pointer transition-all flex flex-col sm:flex-row items-center justify-between gap-3 ${
+                          slot.file
+                            ? "border-zinc-600 bg-[#16161b]"
+                            : "border-zinc-800 hover:border-zinc-600 bg-[#0b0b0d]"
+                        }`}
+                      >
+                        <input
+                          type="file"
+                          accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm"
+                          className="hidden"
+                          onChange={(e) =>
+                            handleRecordingFileSelect(
+                              slot.id,
+                              e.target.files && e.target.files[0]
+                                ? e.target.files[0]
+                                : null
+                            )
+                          }
+                        />
+
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="h-9 w-9 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                            {slot.file ? (
+                              <FileAudio className="h-4 w-4 text-zinc-100" />
+                            ) : (
+                              <UploadCloud className="h-4 w-4 text-zinc-400" />
+                            )}
+                          </div>
+
+                          {slot.file ? (
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-zinc-100 truncate max-w-[260px] sm:max-w-[360px]">
+                                {slot.file.name}
+                              </p>
+                              <p className="text-[11px] text-zinc-400 font-mono">
+                                {(slot.file.size / 1024).toFixed(1)} KB •{" "}
+                                {formatDuration(slot.durationSeconds)}
+                              </p>
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="text-xs font-medium text-zinc-200">
+                                Clique ou arraste o áudio da Ligação #
+                                {index + 1} (MP3, WAV, OGG)
+                              </p>
+                              <p className="text-[11px] text-zinc-500">
+                                Obrigatório para validar este slot
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        <span className="h-8 px-3 rounded-lg border border-zinc-700 bg-zinc-900 text-[11px] font-medium text-zinc-200 inline-flex items-center shrink-0">
+                          {slot.file ? "Trocar arquivo" : "Selecionar arquivo"}
+                        </span>
+                      </label>
+
+                      {slot.error && (
+                        <p className="text-[11px] text-red-300 font-medium flex items-center gap-1.5">
+                          <AlertCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />
+                          <span>{slot.error}</span>
+                        </p>
+                      )}
+
+                      {slot.previewUrl && (
+                        <CallAudioPlayer
+                          audioUrl={slot.previewUrl}
+                          externalCallId={
+                            slot.file?.name || `Ligacao_${index + 1}`
+                          }
+                          durationSeconds={slot.durationSeconds}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-zinc-800/80">
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="h-9 px-4 rounded-lg border border-zinc-800 text-xs text-zinc-400 hover:text-zinc-100"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={uploadAttachmentMutation.isPending}
+                    onClick={() => uploadAttachmentMutation.mutate()}
+                    className="h-9 px-5 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 text-xs font-semibold inline-flex items-center gap-2"
+                  >
+                    <Headphones className="h-3.5 w-3.5" />
+                    <span>
+                      {uploadAttachmentMutation.isPending
+                        ? "Enviando áudios..."
+                        : `Ir para Avaliação (${recordings.length} áudio${
+                            recordings.length > 1 ? "s" : ""
+                          })`}
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ====================================================================
+                STEP 3: FORMULÁRIO DE MONITORIA (PORTABILIDADE / SAC / RETENÇÃO)
+               ==================================================================== */}
+            {step === 3 && selectedCall && activeFormForCall && (
+              <motion.div
+                key="step-3"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18 }}
+                className="space-y-5"
+              >
+                {/* Resumo Condicional dos Dados do Cliente na Auditoria */}
+                <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3">
+                  {isSacOrRetencao ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Ticket Zendesk
+                        </span>
+                        <span className="font-mono text-zinc-100 font-semibold block truncate">
+                          #{ticketInput.replace(/^#/, "")}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Data do Atendimento
+                        </span>
+                        <span className="font-mono text-zinc-100 font-medium block truncate">
+                          {dataAtendimentoInput}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Data da Monitoria
+                        </span>
+                        <span className="font-mono text-zinc-100 font-medium block truncate">
+                          {dataMonitoriaInput}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 text-xs">
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Telefone
+                        </span>
+                        <span className="font-mono text-zinc-100 font-medium block truncate">
+                          {extractCleanPhoneDigits(phoneInput) ||
+                            selectedCall.customerIdentifier}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Data da Venda
+                        </span>
+                        <span className="font-mono text-zinc-100 font-medium block truncate">
+                          {saleDateInput || "-"}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Nome
+                        </span>
+                        <span className="text-zinc-100 font-medium block truncate">
+                          {customerNameInput || "-"}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          CPF
+                        </span>
+                        <span className="font-mono text-zinc-100 font-medium block truncate">
+                          {customerCpfInput || "-"}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Plano Contratado
+                        </span>
+                        <span className="text-zinc-100 font-medium block truncate">
+                          {contractedPlanInput || "-"}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Proposta
+                        </span>
+                        <span className="font-mono text-zinc-100 font-medium block truncate">
+                          {proposalInput || "-"}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Forma de Pagamento
+                        </span>
+                        <span className="text-zinc-100 font-medium block truncate">
+                          {paymentMethodInput || "-"}
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
+                        <span className="text-[10px] font-mono text-zinc-500 block">
+                          Vencimento
+                        </span>
+                        <span className="text-zinc-100 font-medium block truncate">
+                          {dueDateInput || "-"}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Barra Unificada: Seletor de Formulário + Players de Todas as Ligações Anexadas */}
+                <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <FolderKanban className="h-4 w-4 text-zinc-400 shrink-0" />
+                      <select
+                        value={activeFormForCall.id}
+                        onChange={(e) => {
+                          const tpl = existingTemplates.find(
+                            (t) => t.id === e.target.value
+                          );
+                          if (tpl) applyTemplateSelection(tpl);
+                        }}
+                        aria-label="Selecionar formulário"
+                        className="h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-medium text-zinc-100 focus:outline-none focus:border-zinc-600 max-w-md w-full truncate"
+                      >
+                        {existingTemplates.map((tpl) => (
+                          <option key={tpl.id} value={tpl.id}>
+                            {tpl.name} ({tpl.sector || "Geral"} •{" "}
+                            {tpl.maxPossiblePoints} pts)
+                          </option>
+                        ))}
+                      </select>
+
+                      <Link
+                        href="/forms"
+                        className="h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] hover:bg-zinc-900 text-xs text-zinc-300 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                      >
+                        <span>Editar Formulários</span>
+                      </Link>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <span className="text-xs font-mono text-zinc-400">
+                        Nota_Final: {liveScore.obtainedPoints}/
+                        {liveScore.maxPossiblePoints} pts
+                      </span>
+                      <span
+                        className={`px-2.5 py-1 rounded-md text-xs font-mono font-bold border ${
+                          liveScore.status === "APROVADO"
+                            ? "bg-emerald-950/50 text-emerald-300 border-emerald-800/80"
+                            : liveScore.status === "ZERADO_ERRO_GRAVE"
+                            ? "bg-red-950/70 text-red-200 border-red-800"
+                            : "bg-zinc-900 text-zinc-200 border-zinc-800"
+                        }`}
+                      >
+                        {liveScore.finalPercentage.toFixed(0)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Renderiza um Player para cada ligação anexada na avaliação */}
+                  <div className="space-y-2.5">
+                    {recordings.map((slot, idx) => (
+                      <CallAudioPlayer
+                        key={slot.id}
+                        audioUrl={slot.previewUrl || selectedCall.audioUrl}
+                        externalCallId={`Ligação #${idx + 1} • ${
+                          slot.file?.name || selectedCall.externalCallId
+                        }`}
+                        durationSeconds={
+                          slot.durationSeconds || selectedCall.durationSeconds
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Grid Principal: Critérios à Esquerda + Resumo Nota_Final à Direita */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                  <div className="lg:col-span-8 space-y-5">
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-mono uppercase tracking-wider text-zinc-400">
+                          Critérios ({standardItems.length}) •{" "}
+                          {activeFormForCall.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const allChecked = standardItems.every(
+                              (i) => checkedMap[i.id]
+                            );
+                            const next = { ...checkedMap };
+                            standardItems.forEach((i) => {
+                              next[i.id] = !allChecked;
+                            });
+                            setCheckedMap(next);
+                          }}
+                          className="text-[11px] font-mono text-zinc-400 hover:text-zinc-100"
+                        >
+                          Alternar todos
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {standardItems.map((item) => {
+                          const isChecked = !!checkedMap[item.id];
+                          const noteOpen = expandedNoteItemId === item.id;
+
+                          return (
+                            <div
+                              key={item.id}
+                              className={`rounded-xl border transition-all p-3.5 flex flex-col gap-2 ${
+                                isChecked
+                                  ? "border-zinc-600 bg-[#141418]"
+                                  : "border-amber-900/50 bg-[#0b0b0d] hover:border-zinc-700"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <label className="flex items-center gap-3 cursor-pointer flex-1 select-none min-w-0">
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={(e) =>
+                                      setCheckedMap((prev) => ({
+                                        ...prev,
+                                        [item.id]: e.target.checked,
+                                      }))
+                                    }
+                                    className="h-4 w-4 rounded border-zinc-600 text-zinc-100 focus:ring-0 cursor-pointer shrink-0"
+                                  />
+                                  <div className="min-w-0">
+                                    <span className="text-[10px] font-mono text-zinc-500 block">
+                                      {item.category}
+                                    </span>
+                                    <span className="text-xs font-medium text-zinc-100 leading-snug block">
+                                      {item.label}
+                                    </span>
+                                  </div>
+                                </label>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold whitespace-nowrap ${
+                                      isChecked
+                                        ? "bg-zinc-100 text-zinc-950"
+                                        : "bg-red-950/60 text-red-300 border border-red-900/60"
+                                    }`}
+                                  >
+                                    {isChecked
+                                      ? `${item.points || 1} pts`
+                                      : `0 / ${item.points || 1} pts`}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedNoteItemId(
+                                        noteOpen ? null : item.id
+                                      )
+                                    }
+                                    className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300"
+                                  >
+                                    Obs
+                                  </button>
+                                </div>
+                              </div>
+
+                              {(noteOpen || observationMap[item.id]) && (
+                                <input
+                                  type="text"
+                                  value={observationMap[item.id] || ""}
+                                  onChange={(e) =>
+                                    setObservationMap((prev) => ({
+                                      ...prev,
+                                      [item.id]: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="Observação específica deste critério..."
+                                  className="w-full h-8 px-2.5 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-200 focus:outline-none focus:border-zinc-600"
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Falta_Grave / falta_grave & Motivo_falta_grave */}
+                    {fatalItems.length > 0 && (
+                      <div className="space-y-2.5 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-mono uppercase tracking-wider text-red-400/90 flex items-center gap-1.5">
+                            <ShieldAlert className="h-3.5 w-3.5" />
+                            <span>Falta_Grave (Zera Nota_Final = 0)</span>
+                          </span>
+                          <span className="text-[11px] font-mono text-zinc-400">
+                            falta_grave:{" "}
+                            <strong
+                              className={
+                                liveScore.fatalTriggered
+                                  ? "text-red-400"
+                                  : "text-emerald-400"
+                              }
+                            >
+                              {liveScore.fatalTriggered ? "true" : "false"}
+                            </strong>
+                          </span>
+                        </div>
+
+                        <div className="space-y-2">
+                          {fatalItems.map((item) => {
+                            const isViolated = !!checkedMap[item.id];
+                            return (
+                              <div
+                                key={item.id}
+                                className={`rounded-xl border transition-all p-3.5 ${
+                                  isViolated
+                                    ? "border-red-600 bg-red-950/30"
+                                    : "border-zinc-800/90 bg-[#121215] hover:border-red-900/60"
+                                }`}
+                              >
+                                <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={isViolated}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setCheckedMap((prev) => ({
+                                          ...prev,
+                                          [item.id]: checked,
+                                        }));
+                                        if (
+                                          checked &&
+                                          motivoFaltaGrave === "N/A"
+                                        ) {
+                                          setMotivoFaltaGrave("");
+                                        } else if (!checked) {
+                                          setMotivoFaltaGrave("N/A");
+                                        }
+                                      }}
+                                      className="h-4 w-4 rounded border-zinc-600 text-red-600 focus:ring-0 cursor-pointer shrink-0"
+                                    />
+                                    <span className="text-xs font-medium text-zinc-100 leading-snug">
+                                      {item.label}
+                                    </span>
+                                  </div>
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono shrink-0 ${
+                                      isViolated
+                                        ? "bg-red-600 text-white font-bold"
+                                        : "bg-zinc-900 text-zinc-500 border border-zinc-800"
+                                    }`}
+                                  >
+                                    {isViolated ? "FALTA GRAVE" : "Inativo"}
+                                  </span>
+                                </label>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div className="pt-1">
+                          <label className="block text-xs font-mono text-zinc-300 mb-1">
+                            Motivo_falta_grave
+                          </label>
+                          <input
+                            type="text"
+                            value={motivoFaltaGrave}
+                            onChange={(e) =>
+                              setMotivoFaltaGrave(e.target.value)
+                            }
+                            placeholder="Descreva o motivo caso haja falta grave..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Observacoes / Breve_resumo_do_atendimento + Pontos_fortes + Melhorias */}
+                    <div className="space-y-3 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="block text-xs font-mono uppercase tracking-wider text-zinc-300">
+                          Observacoes / Breve_resumo_do_atendimento
+                        </label>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {[
+                            "Possui vício de linguagem (né / tá / aí). ",
+                            "Não menciona os canais digitais da administradora. ",
+                            "Não solicita confirmação de CPF/e-mail/telefone secundário. ",
+                          ].map((snippet) => (
+                            <button
+                              key={snippet}
+                              type="button"
+                              onClick={() =>
+                                setGeneralFeedback((prev) =>
+                                  prev ? `${prev}\n${snippet}` : snippet
+                                )
+                              }
+                              className="px-2 py-0.5 rounded border border-zinc-800 bg-[#121215] hover:border-zinc-600 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
+                            >
+                              <Clock className="h-2.5 w-2.5" />
+                              <span>{snippet.slice(0, 26)}...</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <textarea
+                        rows={5}
+                        value={generalFeedback}
+                        onChange={(e) => setGeneralFeedback(e.target.value)}
+                        placeholder="Breve resumo do atendimento / Observações da monitoria..."
+                        className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                      />
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div>
+                          <label className="block text-xs font-mono text-zinc-400 mb-1">
+                            Pontos_fortes (Opcional)
+                          </label>
+                          <input
+                            type="text"
+                            value={pontosFortes}
+                            onChange={(e) => setPontosFortes(e.target.value)}
+                            placeholder="Pontos fortes identificados..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-mono text-zinc-400 mb-1">
+                            Melhorias (Opcional)
+                          </label>
+                          <input
+                            type="text"
+                            value={melhorias}
+                            onChange={(e) => setMelhorias(e.target.value)}
+                            placeholder="Oportunidades de melhoria..."
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Painel Direito: Nota_Final e Publicar */}
+                  <div className="lg:col-span-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 space-y-4">
+                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                      <span className="text-xs font-semibold text-zinc-200 font-mono">
+                        Nota_Final
+                      </span>
+                      <span className="text-xs font-mono text-zinc-500">
+                        Meta:{" "}
+                        {Number(
+                          activeFormForCall.passingScorePercentage
+                        ).toFixed(0)}
+                        %
+                      </span>
+                    </div>
+
+                    {liveScore.fatalTriggered && (
+                      <div className="p-3 rounded-lg bg-red-950/60 border border-red-800 text-red-200 text-xs flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
+                        <span>falta_grave = true (Nota Zerada)</span>
+                      </div>
+                    )}
+
+                    <div className="py-5 text-center rounded-xl border border-zinc-800 bg-[#121215]">
+                      <p className="text-4xl font-bold tracking-tight text-zinc-50 font-mono tabular-nums">
+                        {liveScore.finalPercentage.toFixed(0)}
+                      </p>
+                      <p className="text-xs text-zinc-400 font-mono mt-1.5 tabular-nums">
+                        {liveScore.obtainedPoints} /{" "}
+                        {liveScore.maxPossiblePoints} pts (
+                        {liveScore.finalPercentage.toFixed(1)}%)
+                      </p>
+                    </div>
+
+                    <div className="p-3 rounded-lg border border-zinc-800/80 bg-[#121215] space-y-1.5 text-[11px] font-mono">
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Setor:</span>
+                        <span className="text-zinc-200">
+                          {selectedSector || analyst?.department || "SAC"}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Formulário:</span>
+                        <span className="text-zinc-200 truncate max-w-[160px]">
+                          {activeFormForCall.name}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Ligações:</span>
+                        <span className="text-zinc-200">
+                          {recordings.length} arquivo(s)
+                        </span>
+                      </div>
+                      {isSacOrRetencao ? (
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Ticket Zendesk:</span>
+                          <span className="text-zinc-200">#{ticketInput}</span>
+                        </div>
+                      ) : (
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Telefone:</span>
+                          <span className="text-zinc-200">
+                            {extractCleanPhoneDigits(phoneInput) ||
+                              selectedCall.customerIdentifier}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={submitEvaluationMutation.isPending}
+                      onClick={() => submitEvaluationMutation.mutate()}
+                      className="w-full h-10 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <FileCheck2 className="h-4 w-4" />
+                      <span>
+                        {submitEvaluationMutation.isPending
+                          ? "Salvando..."
+                          : "Publicar Monitoria"}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
       </div>
     </AppShell>
+  );
+}
+
+export default function AnalystEvaluationFlowPage() {
+  return (
+    <Suspense
+      fallback={
+        <AppShell>
+          <div className="p-8 text-xs font-mono text-zinc-400">
+            Carregando fluxo de avaliação...
+          </div>
+        </AppShell>
+      }
+    >
+      <AnalystEvaluationFlowInner />
+    </Suspense>
   );
 }

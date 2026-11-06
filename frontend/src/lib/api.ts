@@ -229,15 +229,27 @@ export const callsApi = {
   },
   uploadRecording: async (params: {
     file?: File | null;
+    files?: File[];
     analystId: string;
     customerPhone: string;
     customerName?: string;
     campaign?: string;
     durationSeconds?: number;
+    durations?: number[];
+    ticket?: string;
+    attendanceDate?: string;
+    monitoringDate?: string;
+    sector?: string;
   }): Promise<CallRecord> => {
     const formData = new FormData();
-    if (params.file) {
+    if (params.files && params.files.length > 0) {
+      params.files.forEach((f) => {
+        formData.append("files", f);
+      });
+      formData.append("file", params.files[0]);
+    } else if (params.file) {
       formData.append("file", params.file);
+      formData.append("files", params.file);
     }
     formData.append("analystId", params.analystId);
     formData.append("customerPhone", params.customerPhone);
@@ -249,6 +261,23 @@ export const callsApi = {
     }
     if (params.durationSeconds) {
       formData.append("durationSeconds", String(params.durationSeconds));
+    }
+    if (params.durations && params.durations.length > 0) {
+      params.durations.forEach((d) => {
+        formData.append("durations", String(d));
+      });
+    }
+    if (params.ticket) {
+      formData.append("ticket", params.ticket);
+    }
+    if (params.attendanceDate) {
+      formData.append("attendanceDate", params.attendanceDate);
+    }
+    if (params.monitoringDate) {
+      formData.append("monitoringDate", params.monitoringDate);
+    }
+    if (params.sector) {
+      formData.append("sector", params.sector);
     }
     const { data } = await api.post<CallRecord>("/calls/upload", formData, {
       headers: {

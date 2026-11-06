@@ -47,22 +47,34 @@ public class CallRecordController {
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAuthority('ROLE_GESTOR')")
-    @Operation(summary = "Anexa o arquivo de áudio de uma ligação baixada pela gestora e vincula à analista e número")
+    @Operation(summary = "Anexa um ou mais arquivos de áudio de ligações baixadas pela gestora e vincula à analista e cliente/ticket")
     public ResponseEntity<CallRecordResponse> uploadCallRecording(
             @RequestPart(value = "file", required = false) MultipartFile file,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
             @RequestParam("analystId") UUID analystId,
             @RequestParam("customerPhone") String customerPhone,
             @RequestParam(value = "customerName", required = false) String customerName,
             @RequestParam(value = "campaign", required = false) String campaign,
-            @RequestParam(value = "durationSeconds", required = false) Integer durationSeconds
+            @RequestParam(value = "durationSeconds", required = false) Integer durationSeconds,
+            @RequestParam(value = "durations", required = false) List<Integer> durations,
+            @RequestParam(value = "ticket", required = false) String ticket,
+            @RequestParam(value = "attendanceDate", required = false) String attendanceDate,
+            @RequestParam(value = "monitoringDate", required = false) String monitoringDate,
+            @RequestParam(value = "sector", required = false) String sector
     ) {
-        CallRecordResponse created = callRecordService.uploadCallWithAudioFile(
+        CallRecordResponse created = callRecordService.uploadCallWithAudioFiles(
                 file,
+                files,
                 analystId,
                 customerPhone,
                 customerName,
                 campaign,
-                durationSeconds
+                durationSeconds,
+                durations,
+                ticket,
+                attendanceDate,
+                monitoringDate,
+                sector
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }

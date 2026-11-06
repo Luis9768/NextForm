@@ -217,15 +217,46 @@ export default function EvaluationDetailPage() {
             </div>
           </div>
 
-          {/* Audio Player of the Linked Call */}
-          <CallAudioPlayer
-            audioUrl={evaluation.callRecord.audioUrl}
-            externalCallId={evaluation.callRecord.externalCallId}
-            durationSeconds={
-              detectedAudioDuration ?? evaluation.callRecord.durationSeconds
-            }
-            onDurationDetected={setDetectedAudioDuration}
-          />
+          {/* Audio Player(s) of the Linked Call(s) */}
+          {Array.isArray(evaluation.callRecord.metadata?.recordings) &&
+          (evaluation.callRecord.metadata.recordings as Array<{
+            audioUrl: string;
+            label?: string;
+            fileName?: string;
+            durationSeconds?: number;
+          }>).length > 1 ? (
+            <div className="space-y-2.5">
+              {(
+                evaluation.callRecord.metadata.recordings as Array<{
+                  audioUrl: string;
+                  label?: string;
+                  fileName?: string;
+                  durationSeconds?: number;
+                }>
+              ).map((rec, idx) => (
+                <CallAudioPlayer
+                  key={`${rec.audioUrl}_${idx}`}
+                  audioUrl={rec.audioUrl}
+                  externalCallId={`${rec.label || `Ligação #${idx + 1}`} • ${
+                    rec.fileName || evaluation.callRecord.externalCallId
+                  }`}
+                  durationSeconds={rec.durationSeconds || 180}
+                  onDurationDetected={
+                    idx === 0 ? setDetectedAudioDuration : undefined
+                  }
+                />
+              ))}
+            </div>
+          ) : (
+            <CallAudioPlayer
+              audioUrl={evaluation.callRecord.audioUrl}
+              externalCallId={evaluation.callRecord.externalCallId}
+              durationSeconds={
+                detectedAudioDuration ?? evaluation.callRecord.durationSeconds
+              }
+              onDurationDetected={setDetectedAudioDuration}
+            />
+          )}
         </div>
 
         {/* Manager's General Feedback */}

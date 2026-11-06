@@ -1,5 +1,6 @@
 package com.formshq.service;
 
+import com.formshq.config.CacheConfig;
 import com.formshq.domain.entity.SectorTransitionLog;
 import com.formshq.domain.entity.User;
 import com.formshq.domain.enums.Role;
@@ -16,6 +17,7 @@ import com.formshq.repository.UserRepository;
 import com.formshq.security.SectorScopePolicy;
 import com.formshq.security.UserPrincipal;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -118,6 +120,10 @@ public class UserService {
     }
 
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public UserSummaryDto createUser(CreateUserRequest request, UserPrincipal caller) {
         String targetDept = request.department() != null && !request.department().isBlank()
                 ? request.department().trim()
@@ -162,6 +168,10 @@ public class UserService {
     }
 
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public UserSummaryDto toggleUserStatus(UUID targetUserId, Boolean active, UserPrincipal caller) {
         User target = userRepository.findById(targetUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado com ID: " + targetUserId));
@@ -231,6 +241,10 @@ public class UserService {
     }
 
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public UserSummaryDto changeAnalystSector(UUID analystId, ChangeSectorRequest request, UserPrincipal caller) {
         User analyst = userRepository.findById(analystId)
                 .orElseThrow(() -> new ResourceNotFoundException("Analista não encontrado com ID: " + analystId));
@@ -242,10 +256,8 @@ public class UserService {
         User callerEntity = userRepository.findById(caller.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Gestor autenticado não encontrado."));
 
-        if (!caller.isAdmin() && analyst.getManager() != null && !analyst.getManager().getId().equals(caller.getId())) {
-            throw new AccessDeniedException(
-                    "Apenas o Gestor responsável direto por este analista (" + analyst.getManager().getName() + ") tem permissão para alterar seu setor."
-            );
+        if (!caller.isAdmin()) {
+            sectorScopePolicy.assertCallerCanAccessSector(caller, analyst.getDepartment());
         }
 
         String previousSector = analyst.getDepartment() != null ? analyst.getDepartment() : "Geral";
@@ -253,6 +265,7 @@ public class UserService {
 
         if (!previousSector.equalsIgnoreCase(nextSector)) {
             analyst.setDepartment(nextSector);
+            analyst.setAllowedSectors(nextSector);
             userRepository.save(analyst);
 
             SectorTransitionLog logEntry = SectorTransitionLog.builder()
@@ -270,6 +283,10 @@ public class UserService {
     }
 
     @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
     public UserSummaryDto updateManagerAllowedSectors(UUID managerId, List<String> allowedSectors) {
         User manager = userRepository.findById(managerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Gestor não encontrado com ID: " + managerId));

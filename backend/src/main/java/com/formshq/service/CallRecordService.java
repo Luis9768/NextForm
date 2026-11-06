@@ -122,6 +122,41 @@ public class CallRecordService {
             String campaign,
             Integer durationSeconds
     ) {
+        return uploadCallWithAudioFiles(
+                audioFile,
+                audioFile != null ? List.of(audioFile) : List.of(),
+                analystId,
+                customerPhone,
+                customerName,
+                campaign,
+                durationSeconds,
+                durationSeconds != null ? List.of(durationSeconds) : List.of(),
+                null,
+                null,
+                null,
+                null
+        );
+    }
+
+    @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
+    public CallRecordResponse uploadCallWithAudioFiles(
+            MultipartFile singleFile,
+            List<MultipartFile> multiFiles,
+            UUID analystId,
+            String customerPhone,
+            String customerName,
+            String campaign,
+            Integer durationSeconds,
+            List<Integer> durations,
+            String ticket,
+            String attendanceDate,
+            String monitoringDate,
+            String sector
+    ) {
         User analyst = userRepository.findById(analystId)
                 .orElseThrow(() -> new ResourceNotFoundException("Analista não encontrada com ID: " + analystId));
 
@@ -138,38 +173,94 @@ public class CallRecordService {
 
         int hash = UUID.randomUUID().hashCode() & 0x7fffffff;
         String extCallId = "call_" + (100000 + (hash % 899999));
-        int duration = (durationSeconds != null && durationSeconds > 0) ? durationSeconds : 180;
-        String resolvedAudioUrl;
 
-        if (audioFile != null && !audioFile.isEmpty()) {
+        List<MultipartFile> allFiles = new java.util.ArrayList<>();
+        if (multiFiles != null && !multiFiles.isEmpty()) {
+            for (MultipartFile mf : multiFiles) {
+                if (mf != null && !mf.isEmpty()) {
+                    allFiles.add(mf);
+                }
+            }
+        }
+        if (allFiles.isEmpty() && singleFile != null && !singleFile.isEmpty()) {
+            allFiles.add(singleFile);
+        }
+
+        List<Map<String, Object>> recordingsMeta = new java.util.ArrayList<>();
+        List<String> audioUrlsList = new java.util.ArrayList<>();
+        int totalDurationSecs = 0;
+
+        if (!allFiles.isEmpty()) {
             try {
                 Path uploadDir = Paths.get("./data/uploads").toAbsolutePath().normalize();
                 Files.createDirectories(uploadDir);
 
-                String originalName = audioFile.getOriginalFilename() != null
-                        ? audioFile.getOriginalFilename().replaceAll("[^a-zA-Z0-9._-]", "_")
-                        : "recording.mp3";
-                String storedFileName = extCallId + "_" + originalName;
-                byte[] fileBytes = audioFile.getBytes();
+                for (int i = 0; i < allFiles.size(); i++) {
+                    MultipartFile currentFile = allFiles.get(i);
+                    String originalName = currentFile.getOriginalFilename() != null
+                            ? currentFile.getOriginalFilename().replaceAll("[^a-zA-Z0-9._-]", "_")
+                            : ("recording_" + (i + 1) + ".mp3");
+                    String storedFileName = extCallId + "_" + (i + 1) + "_" + originalName;
+                    byte[] fileBytes = currentFile.getBytes();
 
-                // 1. Envia para o Cloudflare R2 (quando configurado no ambiente / Easypanel)
-                String contentType = audioFile.getContentType() != null ? audioFile.getContentType() : "audio/mpeg";
-                r2ObjectStorageService.uploadAudioObject(storedFileName, fileBytes, contentType);
+                    String contentType = currentFile.getContentType() != null ? currentFile.getContentType() : "audio/mpeg";
+                    r2ObjectStorageService.uploadAudioObject(storedFileName, fileBytes, contentType);
 
-                // 2. Mantém cache local para streaming rápido por chunks (SeekableByteChannel)
-                Path targetPath = uploadDir.resolve(storedFileName);
-                Files.write(targetPath, fileBytes);
+                    Path targetPath = uploadDir.resolve(storedFileName);
+                    Files.write(targetPath, fileBytes);
 
-                resolvedAudioUrl = r2ObjectStorageService.resolveStoredAudioUrl(storedFileName);
+                    String itemUrl = r2ObjectStorageService.resolveStoredAudioUrl(storedFileName);
+                    int itemDur = (durations != null && i < durations.size() && durations.get(i) != null && durations.get(i) > 0)
+                            ? durations.get(i)
+                            : ((durationSeconds != null && durationSeconds > 0) ? durationSeconds : 180);
+                    totalDurationSecs += itemDur;
+                    audioUrlsList.add(itemUrl);
+
+                    Map<String, Object> recItem = new LinkedHashMap<>();
+                    recItem.put("index", i + 1);
+                    recItem.put("label", "Ligação " + (i + 1));
+                    recItem.put("fileName", originalName);
+                    recItem.put("storedFileName", storedFileName);
+                    recItem.put("audioUrl", itemUrl);
+                    recItem.put("durationSeconds", itemDur);
+                    recordingsMeta.add(recItem);
+                }
             } catch (IOException e) {
-                log.error("Falha ao salvar arquivo de áudio anexado", e);
-                throw new RuntimeException("Não foi possível armazenar o arquivo de áudio enviado.");
+                log.error("Falha ao salvar arquivo(s) de áudio anexado(s)", e);
+                throw new RuntimeException("Não foi possível armazenar os arquivos de áudio enviados.");
             }
-        } else {
-            resolvedAudioUrl = "/api/v1/audio/" + extCallId + ".wav?duration=" + Math.min(duration, 40);
         }
 
+        int finalDuration = totalDurationSecs > 0
+                ? totalDurationSecs
+                : ((durationSeconds != null && durationSeconds > 0) ? durationSeconds : 180);
+        String resolvedAudioUrl = !audioUrlsList.isEmpty()
+                ? audioUrlsList.get(0)
+                : ("/api/v1/audio/" + extCallId + ".wav?duration=" + Math.min(finalDuration, 40));
+
         String resolvedCampaign = (campaign != null && !campaign.isBlank()) ? campaign.trim() : "auditoria-manual";
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("channel", "upload-manual");
+        metadata.put("campaign", resolvedCampaign);
+        metadata.put("recordingsCount", recordingsMeta.size());
+        metadata.put("recordings", recordingsMeta);
+        metadata.put("audioUrls", audioUrlsList);
+        if (audioUrlsList.size() >= 2) {
+            metadata.put("returnAudioUrl", audioUrlsList.get(1));
+        }
+        if (ticket != null && !ticket.isBlank()) {
+            metadata.put("ticket", ticket.trim());
+        }
+        if (attendanceDate != null && !attendanceDate.isBlank()) {
+            metadata.put("attendanceDate", attendanceDate.trim());
+        }
+        if (monitoringDate != null && !monitoringDate.isBlank()) {
+            metadata.put("monitoringDate", monitoringDate.trim());
+        }
+        if (sector != null && !sector.isBlank()) {
+            metadata.put("sector", sector.trim());
+        }
 
         CallRecord callRecord = CallRecord.builder()
                 .externalCallId(extCallId)
@@ -177,25 +268,19 @@ public class CallRecordService {
                 .customer(customer)
                 .customerIdentifier(phoneKey)
                 .callDate(OffsetDateTime.now())
-                .durationSeconds(duration)
+                .durationSeconds(finalDuration)
                 .audioUrl(resolvedAudioUrl)
                 .status(CallStatus.PENDENTE)
                 .channel("upload-manual")
                 .campaign(resolvedCampaign)
-                .metadata(Map.of(
-                        "channel", "upload-manual",
-                        "campaign", resolvedCampaign,
-                        "uploadedFileName", audioFile != null && audioFile.getOriginalFilename() != null
-                                ? audioFile.getOriginalFilename()
-                                : (extCallId + ".wav")
-                ))
+                .metadata(metadata)
                 .build();
 
         CallRecord saved = callRecordRepository.save(callRecord);
-        log.info("Gravação anexada pela gestora registrada: externalCallId={}, analyst={}, phone={}",
-                extCallId, analyst.getEmail(), phoneKey);
+        log.info("Gravação(ões) anexada(s) pela gestora registrada(s): externalCallId={}, analyst={}, qtdAudios={}",
+                extCallId, analyst.getEmail(), recordingsMeta.size());
 
-        // Dispara automaticamente o webhook do workflow n8n com o áudio e os dados do cliente/formulário
+        // Dispara automaticamente o webhook do workflow n8n com os áudios e os dados do cliente/formulário
         dispatchAudioWorkflowWebhookAsync(saved, customer, analyst);
 
         return CallRecordResponse.fromEntity(saved);
