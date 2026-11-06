@@ -155,6 +155,10 @@ export default function DashboardPage() {
         const rawScore = Number(ev.rawScorePercentage);
         const yFinal = padTop + usableH - (finalScore / 100) * usableH;
         const yRaw = padTop + usableH - (rawScore / 100) * usableH;
+        const rawExt = ev.callRecord.externalCallId || "";
+        const shortToken = rawExt.includes("_")
+          ? rawExt.substring(rawExt.lastIndexOf("_") + 1)
+          : rawExt.slice(-6);
 
         return {
           x,
@@ -162,7 +166,8 @@ export default function DashboardPage() {
           yRaw,
           score: finalScore,
           rawScore,
-          label: `#${ev.callRecord.externalCallId}`,
+          label: `#${rawExt}`,
+          shortLabel: `#${shortToken}`,
           analystName: ev.analyst.name,
           sector: ev.analystSectorSnapshot || ev.analyst.department || "Geral",
           status: ev.status,
@@ -184,6 +189,7 @@ export default function DashboardPage() {
         score: sc,
         rawScore: sc,
         label: pt.label,
+        shortLabel: pt.label.slice(0, 6),
         analystName: `${pt.evaluationsCount} avaliação(ões)`,
         sector: sectorFilter || "Geral",
         status: sc >= 75 ? "APROVADO" : "REPROVADO",
@@ -841,6 +847,12 @@ export default function DashboardPage() {
                                 <circle
                                   cx={pt.x}
                                   cy={pt.y}
+                                  r={14}
+                                  fill="transparent"
+                                />
+                                <circle
+                                  cx={pt.x}
+                                  cy={pt.y}
                                   r={isHovered ? 6 : 4}
                                   fill="#09090b"
                                   stroke="#fafafa"
@@ -848,13 +860,14 @@ export default function DashboardPage() {
                                 />
                                 <text
                                   x={pt.x}
-                                  y={206}
+                                  y={205}
                                   textAnchor="middle"
-                                  fill="#a1a1aa"
+                                  fill={isHovered ? "#fafafa" : "#71717a"}
+                                  fontWeight={isHovered ? "700" : "400"}
                                   fontSize="9"
                                   fontFamily="monospace"
                                 >
-                                  {pt.label}
+                                  {pt.shortLabel}
                                 </text>
                               </g>
                             );
