@@ -138,11 +138,11 @@ export default function AnalystsDirectoryPage() {
         </motion.div>
 
         {isLoading || !summary ? (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-5">
-            {[1, 2, 3].map((i) => (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map((i) => (
               <div
                 key={i}
-                className="h-56 rounded-2xl border border-zinc-800 shadcn-kpi-card animate-pulse p-6"
+                className="h-52 w-full max-w-[340px] rounded-xl border border-zinc-800 shadcn-kpi-card animate-pulse p-4"
               />
             ))}
           </div>
@@ -154,19 +154,19 @@ export default function AnalystsDirectoryPage() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredAnalysts.map((analyst, idx) => (
               <motion.div
                 key={analyst.analystId}
-                initial={{ opacity: 0, y: 14 }}
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.2, delay: Math.min(0.03 * idx, 0.3) }}
-                className="rounded-2xl border border-zinc-200 dark:border-zinc-800/90 shadcn-kpi-card p-5 sm:p-6 flex flex-col justify-between hover:border-zinc-500 dark:hover:border-zinc-600 transition-all group overflow-hidden"
+                transition={{ duration: 0.18, delay: Math.min(0.02 * idx, 0.25) }}
+                className="w-full max-w-[340px] rounded-xl border border-zinc-200 dark:border-zinc-800/90 shadcn-kpi-card p-4 flex flex-col justify-between hover:border-zinc-500 dark:hover:border-zinc-600 transition-all group overflow-hidden"
               >
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <div className="h-11 w-11 rounded-full bg-zinc-200 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 flex items-center justify-center font-bold text-sm text-zinc-900 dark:text-zinc-100 shrink-0">
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div className="h-9 w-9 rounded-lg bg-zinc-200 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 flex items-center justify-center font-mono font-bold text-xs text-zinc-900 dark:text-zinc-100 shrink-0">
                         {analyst.analystName
                           .split(" ")
                           .map((n) => n[0])
@@ -174,21 +174,21 @@ export default function AnalystsDirectoryPage() {
                           .join("")}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <h2 className="text-base font-bold text-zinc-900 dark:text-zinc-100 group-hover:text-white truncate">
+                        <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 group-hover:text-white truncate">
                           {analyst.analystName}
                         </h2>
-                        <p className="text-xs text-zinc-500 truncate">
+                        <p className="text-[11px] font-mono text-zinc-500 truncate">
                           {analyst.analystEmail}
                         </p>
                       </div>
                     </div>
 
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 whitespace-nowrap shrink-0">
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold tabular-nums border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-900 text-zinc-800 dark:text-zinc-200 whitespace-nowrap shrink-0">
                       {Number(analyst.averageScore).toFixed(1)}%
                     </span>
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     <label className="text-[11px] text-zinc-400 flex items-center gap-1.5">
                       <UserCheck className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
                       <span>Setor</span>
@@ -217,40 +217,40 @@ export default function AnalystsDirectoryPage() {
                     </select>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 pt-3 border-t border-zinc-200 dark:border-zinc-800/80 text-center">
-                    <div className="p-2.5 rounded-xl bg-zinc-100/60 dark:bg-zinc-900/60 overflow-hidden">
+                  <div className="grid grid-cols-3 gap-1.5 pt-2.5 border-t border-zinc-200 dark:border-zinc-800/80 text-center">
+                    <div className="p-2 rounded-lg bg-zinc-100/60 dark:bg-zinc-900/60 overflow-hidden">
                       <span className="text-[10px] font-mono text-zinc-500 uppercase block whitespace-nowrap">
                         Avaliadas
                       </span>
-                      <span className="text-sm font-bold text-zinc-900 dark:text-zinc-100 mt-0.5 block">
+                      <span className="text-xs font-bold font-mono tabular-nums text-zinc-900 dark:text-zinc-100 mt-0.5 block">
                         {analyst.evaluatedCalls}
                       </span>
                     </div>
-                    <div className="p-2.5 rounded-xl bg-zinc-100/60 dark:bg-zinc-900/60 overflow-hidden">
+                    <div className="p-2 rounded-lg bg-zinc-100/60 dark:bg-zinc-900/60 overflow-hidden">
                       <span className="text-[10px] font-mono text-zinc-500 uppercase flex items-center justify-center gap-1 whitespace-nowrap">
                         <CheckCircle2 className="h-3 w-3 text-emerald-400 shrink-0" />
                         <span>Aprov.</span>
                       </span>
-                      <span className="text-sm font-bold text-emerald-500 mt-0.5 block">
+                      <span className="text-xs font-bold font-mono tabular-nums text-emerald-500 mt-0.5 block">
                         {analyst.approvedCount}
                       </span>
                     </div>
-                    <div className="p-2.5 rounded-xl bg-zinc-100/60 dark:bg-zinc-900/60 overflow-hidden">
+                    <div className="p-2 rounded-lg bg-zinc-100/60 dark:bg-zinc-900/60 overflow-hidden">
                       <span className="text-[10px] font-mono text-zinc-500 uppercase flex items-center justify-center gap-1 whitespace-nowrap">
                         <ShieldAlert className="h-3 w-3 text-red-400 shrink-0" />
                         <span>Fatal</span>
                       </span>
-                      <span className="text-sm font-bold text-red-400 mt-0.5 block">
+                      <span className="text-xs font-bold font-mono tabular-nums text-red-400 mt-0.5 block">
                         {analyst.fatalErrorCount}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-4 mt-4 border-t border-zinc-200 dark:border-zinc-800/80">
+                <div className="pt-3 mt-3 border-t border-zinc-200 dark:border-zinc-800/80">
                   <Link
                     href={`/analysts/${analyst.analystId}`}
-                    className="w-full h-10 px-4 rounded-xl bg-zinc-900 text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-sm whitespace-nowrap"
+                    className="w-full h-8.5 py-2 px-3 rounded-lg bg-zinc-900 text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-sm whitespace-nowrap"
                   >
                     <Phone className="h-3.5 w-3.5 shrink-0" />
                     <span>Avaliar</span>
