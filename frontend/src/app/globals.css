@@ -274,3 +274,9 @@ html:not(.dark) main .text-sky-300,
 html:not(.dark) main .text-sky-400 {
   color: #0369a1 !important;
 }
+
+/* Barras de progresso e mini-barras em gráficos no modo claro */
+html:not(.dark) main .bg-zinc-900 > .bg-zinc-100,
+html:not(.dark) main .bg-zinc-900 > .bg-zinc-200 {
+  background-color: #18181b !important;
+}

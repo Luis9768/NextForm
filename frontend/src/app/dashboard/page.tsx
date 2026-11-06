@@ -2,6 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
+import { useTheme } from "next-themes";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -71,6 +72,8 @@ function buildSmoothSvgPath(
 
 export default function DashboardPage() {
   const { user, isGestor } = useAuth();
+  const { resolvedTheme } = useTheme();
+  const isLight = resolvedTheme === "light";
   const [selectedEvaluationModal, setSelectedEvaluationModal] =
     useState<Evaluation | null>(null);
   const [activeTab, setActiveTab] = useState<"evaluations" | "ranking">(
@@ -384,12 +387,12 @@ export default function DashboardPage() {
                       >
                         <stop
                           offset="0%"
-                          stopColor="#f4f4f5"
-                          stopOpacity="0.32"
+                          stopColor={isLight ? "#18181b" : "#f4f4f5"}
+                          stopOpacity={isLight ? "0.18" : "0.32"}
                         />
                         <stop
                           offset="100%"
-                          stopColor="#f4f4f5"
+                          stopColor={isLight ? "#18181b" : "#f4f4f5"}
                           stopOpacity="0.0"
                         />
                       </linearGradient>
@@ -407,7 +410,7 @@ export default function DashboardPage() {
                       transition={{ duration: 0.85, ease: "easeOut" }}
                       d={buildSmoothSvgPath(sparklineScorePoints, false, 48)}
                       fill="none"
-                      stroke="#f4f4f5"
+                      stroke={isLight ? "#18181b" : "#f4f4f5"}
                       strokeWidth="2"
                       strokeLinecap="round"
                     />
@@ -598,7 +601,7 @@ export default function DashboardPage() {
                         cy="28"
                         r="22"
                         fill="none"
-                        stroke="#27272a"
+                        stroke={isLight ? "#e4e4e7" : "#27272a"}
                         strokeWidth="5"
                       />
                       <motion.circle
@@ -606,7 +609,13 @@ export default function DashboardPage() {
                         cy="28"
                         r="22"
                         fill="none"
-                        stroke={fatalCount > 0 ? "#f87171" : "#f4f4f5"}
+                        stroke={
+                          fatalCount > 0
+                            ? "#ef4444"
+                            : isLight
+                            ? "#18181b"
+                            : "#f4f4f5"
+                        }
                         strokeWidth="5"
                         strokeLinecap="round"
                         strokeDasharray={2 * Math.PI * 22}
@@ -743,17 +752,17 @@ export default function DashboardPage() {
                             >
                               <stop
                                 offset="0%"
-                                stopColor="#e4e4e7"
-                                stopOpacity="0.28"
+                                stopColor={isLight ? "#18181b" : "#e4e4e7"}
+                                stopOpacity={isLight ? "0.14" : "0.28"}
                               />
                               <stop
                                 offset="85%"
-                                stopColor="#e4e4e7"
-                                stopOpacity="0.03"
+                                stopColor={isLight ? "#18181b" : "#e4e4e7"}
+                                stopOpacity="0.02"
                               />
                               <stop
                                 offset="100%"
-                                stopColor="#e4e4e7"
+                                stopColor={isLight ? "#18181b" : "#e4e4e7"}
                                 stopOpacity="0.0"
                               />
                             </linearGradient>
@@ -769,7 +778,15 @@ export default function DashboardPage() {
                                   y1={y}
                                   x2="692"
                                   y2={y}
-                                  stroke={val === 75 ? "#52525b" : "#1f1f23"}
+                                  stroke={
+                                    val === 75
+                                      ? isLight
+                                        ? "#a1a1aa"
+                                      : "#52525b"
+                                      : isLight
+                                      ? "#e4e4e7"
+                                      : "#1f1f23"
+                                  }
                                   strokeDasharray={val === 75 ? "4 4" : undefined}
                                   strokeWidth="1"
                                 />
@@ -789,7 +806,7 @@ export default function DashboardPage() {
                           {/* Secondary Dashed Line: Nota Bruta (Antes de Erro Grave) */}
                           <motion.path
                             initial={{ pathLength: 0, opacity: 0 }}
-                            animate={{ pathLength: 1, opacity: 0.45 }}
+                            animate={{ pathLength: 1, opacity: 0.55 }}
                             transition={{ duration: 0.9, ease: "easeOut" }}
                             d={buildSmoothSvgPath(
                               mainChartData.map((p) => ({ x: p.x, y: p.yRaw })),
@@ -797,7 +814,7 @@ export default function DashboardPage() {
                               186
                             )}
                             fill="none"
-                            stroke="#a1a1aa"
+                            stroke={isLight ? "#71717a" : "#a1a1aa"}
                             strokeWidth="1.5"
                             strokeDasharray="3 3"
                           />
@@ -818,7 +835,7 @@ export default function DashboardPage() {
                             transition={{ duration: 0.95, ease: "easeOut" }}
                             d={buildSmoothSvgPath(mainChartData, false, 186)}
                             fill="none"
-                            stroke="#fafafa"
+                            stroke={isLight ? "#18181b" : "#fafafa"}
                             strokeWidth="2.5"
                             strokeLinecap="round"
                           />
@@ -854,15 +871,21 @@ export default function DashboardPage() {
                                   cx={pt.x}
                                   cy={pt.y}
                                   r={isHovered ? 6 : 4}
-                                  fill="#09090b"
-                                  stroke="#fafafa"
+                                  fill={isLight ? "#ffffff" : "#09090b"}
+                                  stroke={isLight ? "#18181b" : "#fafafa"}
                                   strokeWidth={isHovered ? 2.5 : 2}
                                 />
                                 <text
                                   x={pt.x}
                                   y={205}
                                   textAnchor="middle"
-                                  fill={isHovered ? "#fafafa" : "#71717a"}
+                                  fill={
+                                    isHovered
+                                      ? isLight
+                                        ? "#18181b"
+                                        : "#fafafa"
+                                      : "#71717a"
+                                  }
                                   fontWeight={isHovered ? "700" : "400"}
                                   fontSize="9"
                                   fontFamily="monospace"
@@ -880,7 +903,11 @@ export default function DashboardPage() {
                     <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-zinc-800/80 text-[11px] font-mono text-zinc-400">
                       <div className="flex items-center gap-4">
                         <span className="inline-flex items-center gap-1.5">
-                          <span className="h-2 w-2 rounded-full bg-zinc-100" />
+                          <span
+                            className={`h-2.5 w-2.5 rounded-full ${
+                              isLight ? "bg-zinc-900" : "bg-zinc-100"
+                            }`}
+                          />
                           Nota Final (%)
                         </span>
                         <span className="inline-flex items-center gap-1.5">
