@@ -341,31 +341,32 @@ export default function DashboardPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25 }}
-                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col justify-between gap-3"
+                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-4 sm:p-5 flex flex-col justify-between gap-2.5 min-w-0 overflow-hidden h-[172px]"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-zinc-400">
-                    Média Geral de Qualidade
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className="text-xs font-medium text-zinc-400 truncate">
+                    Média de Qualidade
                   </span>
-                  <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
+                  <span className="text-[11px] font-mono tabular-nums px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 whitespace-nowrap shrink-0">
                     {evaluatedCalls} aval.
                   </span>
                 </div>
 
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono">
+                <div className="flex items-baseline justify-between gap-2 min-w-0">
+                  <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono tabular-nums">
                     {avgScore.toFixed(1)}%
                   </p>
-                  <span className="text-[11px] font-mono text-zinc-400">
+                  <span className="text-[11px] font-mono tabular-nums text-zinc-400 whitespace-nowrap shrink-0">
                     Meta: 75.0%
                   </span>
                 </div>
 
                 {/* Animated Sparkline SVG */}
-                <div className="h-12 w-full pt-1">
+                <div className="h-11 w-full pt-0.5 overflow-hidden">
                   <svg
                     viewBox="0 0 220 48"
-                    className="w-full h-full overflow-visible"
+                    preserveAspectRatio="none"
+                    className="w-full h-full block"
                   >
                     <defs>
                       <linearGradient
@@ -413,28 +414,28 @@ export default function DashboardPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25, delay: 0.05 }}
-                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col justify-between gap-3"
+                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-4 sm:p-5 flex flex-col justify-between gap-2.5 min-w-0 overflow-hidden h-[172px]"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-zinc-400">
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className="text-xs font-medium text-zinc-400 truncate">
                     Taxa de Aprovação
                   </span>
-                  <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
-                    {approvedCount}/{evaluatedCalls} aprov.
+                  <span className="text-[11px] font-mono tabular-nums px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 whitespace-nowrap shrink-0">
+                    {approvedCount}/{evaluatedCalls}
                   </span>
                 </div>
 
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono">
+                <div className="flex items-baseline justify-between gap-2 min-w-0">
+                  <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono tabular-nums">
                     {approvalRate.toFixed(1)}%
                   </p>
-                  <span className="text-[11px] font-mono text-zinc-400">
+                  <span className="text-[11px] font-mono tabular-nums text-zinc-400 whitespace-nowrap shrink-0">
                     {failedCount} reprov.
                   </span>
                 </div>
 
                 {/* Animated Segmented Distribution Bar */}
-                <div className="space-y-2 pt-1">
+                <div className="space-y-1.5 pt-0.5 min-w-0">
                   <div className="h-2.5 w-full rounded-full bg-zinc-900 overflow-hidden flex gap-0.5 p-0.5 border border-zinc-800/80">
                     <motion.div
                       initial={{ width: 0 }}
@@ -476,7 +477,7 @@ export default function DashboardPage() {
                       title={`Erro Grave: ${fatalCount}`}
                     />
                   </div>
-                  <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400">
+                  <div className="flex items-center justify-between gap-1 text-[10px] font-mono tabular-nums text-zinc-400 truncate">
                     <span>Aprov: {approvedCount}</span>
                     <span>Reprov: {failedCount}</span>
                     <span>Fatal: {fatalCount}</span>
@@ -489,28 +490,28 @@ export default function DashboardPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25, delay: 0.1 }}
-                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col justify-between gap-3"
+                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-4 sm:p-5 flex flex-col justify-between gap-2.5 min-w-0 overflow-hidden h-[172px]"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-zinc-400">
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className="text-xs font-medium text-zinc-400 truncate">
                     Cobertura de Ligações
                   </span>
-                  <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
-                    {coverageRate.toFixed(0)}% auditado
+                  <span className="text-[11px] font-mono tabular-nums px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 whitespace-nowrap shrink-0">
+                    {coverageRate.toFixed(0)}% audit.
                   </span>
                 </div>
 
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono">
+                <div className="flex items-baseline justify-between gap-2 min-w-0">
+                  <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono tabular-nums">
                     {totalCalls}
                   </p>
-                  <span className="text-[11px] font-mono text-zinc-400">
+                  <span className="text-[11px] font-mono tabular-nums text-zinc-400 whitespace-nowrap shrink-0">
                     {pendingCalls} pendentes
                   </span>
                 </div>
 
-                {/* Mini Animated Bar Sparkline per Analyst */}
-                <div className="h-12 flex items-end gap-1.5 pt-1">
+                {/* Mini Animated Bar Sparkline per Analyst (5 Fixed Columns - Zero Overflow) */}
+                <div className="h-11 grid grid-cols-5 gap-1.5 items-end pt-0.5 w-full overflow-hidden">
                   {(summary.analystRanking.length > 0
                     ? summary.analystRanking
                     : [
@@ -522,22 +523,22 @@ export default function DashboardPage() {
                         },
                       ]
                   )
-                    .slice(0, 6)
+                    .slice(0, 5)
                     .map((a, idx) => {
                       const pct =
                         a.totalCalls > 0
                           ? Math.max(
-                              15,
+                              18,
                               Math.round((a.evaluatedCalls / a.totalCalls) * 100)
                             )
                           : 20;
                       return (
                         <div
                           key={a.analystId}
-                          className="flex-1 flex flex-col items-center gap-1 h-full justify-end"
+                          className="min-w-0 flex flex-col items-center gap-1 h-full justify-end overflow-hidden"
                           title={`${a.analystName}: ${a.evaluatedCalls}/${a.totalCalls} auditadas`}
                         >
-                          <div className="w-full h-8 bg-zinc-900 rounded-sm flex items-end overflow-hidden border border-zinc-800/80">
+                          <div className="w-full h-7 bg-zinc-900 rounded-sm flex items-end overflow-hidden border border-zinc-800/80">
                             <motion.div
                               initial={{ height: 0 }}
                               animate={{ height: `${pct}%` }}
@@ -548,7 +549,7 @@ export default function DashboardPage() {
                               className="w-full bg-zinc-200 rounded-t-sm"
                             />
                           </div>
-                          <span className="text-[9px] font-mono text-zinc-500 truncate max-w-full">
+                          <span className="text-[9px] font-mono text-zinc-500 truncate w-full text-center leading-none">
                             {a.analystName.split(" ")[0]}
                           </span>
                         </div>
@@ -562,30 +563,30 @@ export default function DashboardPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.25, delay: 0.15 }}
-                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 flex flex-col justify-between gap-3"
+                className="rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-4 sm:p-5 flex flex-col justify-between gap-2.5 min-w-0 overflow-hidden h-[172px]"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-zinc-400">
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <span className="text-xs font-medium text-zinc-400 truncate">
                     Incidência de Erro Grave
                   </span>
-                  <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
+                  <span className="text-[11px] font-mono tabular-nums px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 whitespace-nowrap shrink-0">
                     {fatalCount} ocorr.
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono">
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <div className="min-w-0">
+                    <p className="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50 font-mono tabular-nums">
                       {fatalRate.toFixed(1)}%
                     </p>
-                    <span className="text-[11px] font-mono text-zinc-400 block mt-0.5">
+                    <span className="text-[11px] font-mono tabular-nums text-zinc-400 block truncate">
                       {(100 - fatalRate).toFixed(1)}% sem falha grave
                     </span>
                   </div>
 
                   {/* Animated Circular Ring Gauge */}
-                  <div className="relative h-14 w-14 shrink-0 flex items-center justify-center">
-                    <svg className="h-14 w-14 -rotate-90" viewBox="0 0 56 56">
+                  <div className="relative h-12 w-12 shrink-0 flex items-center justify-center">
+                    <svg className="h-12 w-12 -rotate-90" viewBox="0 0 56 56">
                       <circle
                         cx="28"
                         cy="28"
@@ -611,15 +612,17 @@ export default function DashboardPage() {
                         transition={{ duration: 0.85, ease: "easeOut" }}
                       />
                     </svg>
-                    <span className="absolute text-[10px] font-mono font-bold text-zinc-200">
+                    <span className="absolute text-[10px] font-mono font-bold tabular-nums text-zinc-200">
                       {fatalCount}x
                     </span>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 pt-1 border-t border-zinc-800/70">
-                  <span>Zera nota se acionado</span>
-                  <span>{evaluatedCalls - fatalCount} íntegras</span>
+                <div className="flex items-center justify-between gap-2 text-[10px] font-mono tabular-nums text-zinc-500 pt-1.5 border-t border-zinc-800/70 min-w-0">
+                  <span className="truncate">Zera nota se acionado</span>
+                  <span className="whitespace-nowrap shrink-0">
+                    {evaluatedCalls - fatalCount} íntegras
+                  </span>
                 </div>
               </motion.div>
             </div>
@@ -942,7 +945,7 @@ export default function DashboardPage() {
                 )}
 
                 {chartView === "criteria" && (
-                  <div className="space-y-3 pt-1">
+                  <div className="space-y-3 pt-1 max-h-[280px] overflow-y-auto pr-1">
                     {(summary.criteriaComparison ?? []).map((crit, idx) => {
                       const rate = Number(crit.complianceRatePercentage);
                       return (
