@@ -419,17 +419,19 @@ public class CallRecordService {
                     ? initialMeta.get("returnAudioFileId").toString()
                     : tryUploadAudioToDirectus(secondaryAudioBytes, secondaryOriginalName);
 
+            if (directusUploadedId != null && primaryAudioBytes != null && primaryAudioBytes.length > 0 && r2ObjectStorageService.isConfigured()) {
+                String ext = (primaryOriginalName != null && primaryOriginalName.toLowerCase().endsWith(".wav")) ? ".wav" : ".mp3";
+                String ct = ext.equals(".wav") ? "audio/wav" : "audio/mpeg";
+                r2ObjectStorageService.uploadAudioObject(directusUploadedId, primaryAudioBytes, ct);
+                r2ObjectStorageService.uploadAudioObject(directusUploadedId + ext, primaryAudioBytes, ct);
+                r2ObjectStorageService.uploadAudioObject("directus_" + directusUploadedId + ext, primaryAudioBytes, ct);
+            }
+
             if (directusUploadedId != null || directusReturnId != null) {
                 callRecordRepository.findById(callUuid).ifPresent(cr -> {
                     Map<String, Object> m = new LinkedHashMap<>(cr.getMetadata() != null ? cr.getMetadata() : Map.of());
                     if (directusUploadedId != null) {
                         m.put("directusAudioFileId", directusUploadedId);
-                        if (primaryAudioBytes != null && primaryAudioBytes.length > 0 && r2ObjectStorageService.isConfigured()) {
-                            String ext = (primaryOriginalName != null && primaryOriginalName.toLowerCase().endsWith(".wav")) ? ".wav" : ".mp3";
-                            String ct = ext.equals(".wav") ? "audio/wav" : "audio/mpeg";
-                            r2ObjectStorageService.uploadAudioObject(directusUploadedId, primaryAudioBytes, ct);
-                            r2ObjectStorageService.uploadAudioObject("directus_" + directusUploadedId + ext, primaryAudioBytes, ct);
-                        }
                     }
                     if (directusReturnId != null) {
                         m.put("returnAudioFileId", directusReturnId);
@@ -471,7 +473,7 @@ public class CallRecordService {
                 payload.put("Audio_Ligacao_Retorno", directusReturnId);
                 payload.put("audio_chamada_retorno", directusReturnId);
             }
-            payload.put("audioUrl", audioUrl);
+            payload.put("audioUrl", presignedR2Url != null ? presignedR2Url : audioUrl);
             payload.put("Operador", analyst.getId().toString());
             payload.put("operadorNome", analyst.getName());
             payload.put("operadorEmail", analyst.getEmail());

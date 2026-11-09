@@ -55,8 +55,7 @@ public class DirectusEvaluationSyncService {
     private static final Set<String> HEAVY_METADATA_EXCLUDED_KEYS = Set.of(
             "Transcricao", "transcricao", "user_created", "user_updated",
             "Operador", "ligacao", "Ligacao", "Audio_Chamada", "audio_chamada",
-            "Audio_Ligacao", "Ligacao_Retorno", "Audio_Ligacao_Retorno", "audio_chamada_retorno",
-            "Observacoes", "Breve_resumo_do_atendimento", "Pontos_fortes", "Melhorias", "Motivo_falta_grave"
+            "Audio_Ligacao", "Ligacao_Retorno", "Audio_Ligacao_Retorno", "audio_chamada_retorno"
     );
 
     private final EvaluationRepository evaluationRepository;
@@ -130,7 +129,7 @@ public class DirectusEvaluationSyncService {
             if (k == null || v == null || HEAVY_METADATA_EXCLUDED_KEYS.contains(k)) {
                 continue;
             }
-            if (v instanceof Boolean || v instanceof Number || (v instanceof String s && s.length() <= 160)) {
+            if (v instanceof Boolean || v instanceof Number || (v instanceof String s && s.length() <= 4000)) {
                 slim.put(k, v);
             }
         }
@@ -751,9 +750,11 @@ public class DirectusEvaluationSyncService {
             }
         } else if (rawPayload instanceof Map<?, ?> rawMap) {
             Map<String, Object> map = new LinkedHashMap<>((Map<String, Object>) rawMap);
-            Object dataNode = map.get("data");
-            if (dataNode instanceof Map<?, ?> || dataNode instanceof List<?>) {
-                result.addAll(unwrapWorkflowItems(dataNode));
+            Object nestedNode = map.get("data") != null
+                    ? map.get("data")
+                    : (map.get("output") != null ? map.get("output") : map.get("result"));
+            if (nestedNode instanceof Map<?, ?> || nestedNode instanceof List<?>) {
+                result.addAll(unwrapWorkflowItems(nestedNode));
             } else {
                 result.add(map);
             }
@@ -882,7 +883,10 @@ public class DirectusEvaluationSyncService {
                 if (ticket != null) {
                     metadata.put("ticket", ticket);
                 }
-                String transcricao = extractString(item, "Transcricao", null);
+                String transcricao = firstNonBlank(
+                        extractString(item, "Transcricao", null),
+                        extractString(item, "transcricao", null)
+                );
                 if (transcricao != null) {
                     metadata.put("transcricao", transcricao);
                 }
@@ -1738,7 +1742,11 @@ public class DirectusEvaluationSyncService {
             }
         }
 
-        if (item.containsKey("Telefone_Portabilidade") || item.containsKey("Data_da_venda") || item.containsKey("Observacoes")) {
+        if (item.containsKey("Telefone_Portabilidade")
+                || item.containsKey("Data_da_venda")
+                || item.containsKey("valores_plano")
+                || item.containsKey("fidelidade_e_formas_de_pagamento")
+                || item.containsKey("Observacoes")) {
             return COL_AQUISICAO;
         }
         if (item.containsKey("Realizou_todos_procedimentos_corretamente") || item.containsKey("Nao_Interrompe_o_Cliente")) {

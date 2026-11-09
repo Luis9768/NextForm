@@ -78,6 +78,12 @@ function unwrapWebhookDataObject(
     if (obj.data && typeof obj.data === "object") {
       return unwrapWebhookDataObject(obj.data);
     }
+    if (obj.output && typeof obj.output === "object") {
+      return unwrapWebhookDataObject(obj.output);
+    }
+    if (obj.result && typeof obj.result === "object") {
+      return unwrapWebhookDataObject(obj.result);
+    }
     return obj;
   }
   return null;
