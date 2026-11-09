@@ -754,7 +754,17 @@ public class DirectusEvaluationSyncService {
                     ? map.get("data")
                     : (map.get("output") != null ? map.get("output") : map.get("result"));
             if (nestedNode instanceof Map<?, ?> || nestedNode instanceof List<?>) {
-                result.addAll(unwrapWorkflowItems(nestedNode));
+                List<Map<String, Object>> unwrappedChildren = unwrapWorkflowItems(nestedNode);
+                for (Map<String, Object> child : unwrappedChildren) {
+                    Map<String, Object> merged = new LinkedHashMap<>(child);
+                    for (Map.Entry<String, Object> rootEntry : map.entrySet()) {
+                        String k = rootEntry.getKey();
+                        if (!"data".equals(k) && !"output".equals(k) && !"result".equals(k) && rootEntry.getValue() != null) {
+                            merged.putIfAbsent(k, rootEntry.getValue());
+                        }
+                    }
+                    result.add(merged);
+                }
             } else {
                 result.add(map);
             }
@@ -885,7 +895,11 @@ public class DirectusEvaluationSyncService {
                 }
                 String transcricao = firstNonBlank(
                         extractString(item, "Transcricao", null),
-                        extractString(item, "transcricao", null)
+                        extractString(item, "transcricao", null),
+                        extractString(item, "transcription", null),
+                        extractString(item, "transcript", null),
+                        extractString(item, "texto", null),
+                        extractString(item, "text", null)
                 );
                 if (transcricao != null) {
                     metadata.put("transcricao", transcricao);
@@ -1832,6 +1846,14 @@ public class DirectusEvaluationSyncService {
         String resumo = extractString(item, "Breve_resumo_do_atendimento", null);
         if (resumo != null) {
             parts.add(resumo);
+        }
+        String minGraves = extractString(item, "minutagem_faltas_graves", null);
+        if (minGraves != null && !"N/A".equalsIgnoreCase(minGraves.trim())) {
+            parts.add("Minutagem de Faltas Graves (Minuto e Segundo): " + minGraves.trim());
+        }
+        String minComuns = extractString(item, "minutagem_falhas_comuns", null);
+        if (minComuns != null && !"N/A".equalsIgnoreCase(minComuns.trim())) {
+            parts.add("Minutagem de Falhas / Observações (Minuto e Segundo): " + minComuns.trim());
         }
         String fortes = extractString(item, "Pontos_fortes", null);
         if (fortes != null) {

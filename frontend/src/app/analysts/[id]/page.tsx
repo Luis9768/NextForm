@@ -62,10 +62,6 @@ const AVAILABLE_SECTORS = ["SAC", "Cobrança & Retenção", "Aquisição"] as co
 const DIRECTUS_WEBHOOK_URL =
   process.env.NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL || "";
 
-const AUDIO_EVALUATION_WEBHOOK_URL =
-  process.env.NEXT_PUBLIC_AUDIO_EVALUATION_WEBHOOK_URL ||
-  "https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7";
-
 function unwrapWebhookDataObject(
   raw: unknown
 ): Record<string, unknown> | null {
@@ -75,14 +71,31 @@ function unwrapWebhookDataObject(
   }
   if (typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
+    const mergeSiblings = (inner: Record<string, unknown> | null) => {
+      if (!inner) return obj;
+      const merged: Record<string, unknown> = { ...inner };
+      Object.entries(obj).forEach(([k, v]) => {
+        if (
+          k !== "data" &&
+          k !== "output" &&
+          k !== "result" &&
+          v !== undefined &&
+          v !== null &&
+          merged[k] === undefined
+        ) {
+          merged[k] = v;
+        }
+      });
+      return merged;
+    };
     if (obj.data && typeof obj.data === "object") {
-      return unwrapWebhookDataObject(obj.data);
+      return mergeSiblings(unwrapWebhookDataObject(obj.data));
     }
     if (obj.output && typeof obj.output === "object") {
-      return unwrapWebhookDataObject(obj.output);
+      return mergeSiblings(unwrapWebhookDataObject(obj.output));
     }
     if (obj.result && typeof obj.result === "object") {
-      return unwrapWebhookDataObject(obj.result);
+      return mergeSiblings(unwrapWebhookDataObject(obj.result));
     }
     return obj;
   }
@@ -325,7 +338,23 @@ function AnalystEvaluationFlowInner() {
         (typeof dataMap.Transcricao === "string" && dataMap.Transcricao) ||
         (typeof dataMap.transcricao === "string" && dataMap.transcricao) ||
         (typeof dataMap.transcription === "string" && dataMap.transcription) ||
+        (typeof dataMap.transcript === "string" && dataMap.transcript) ||
+        (typeof dataMap.texto === "string" && dataMap.texto) ||
+        (typeof dataMap.text === "string" && dataMap.text) ||
         "";
+      const minGraves =
+        typeof dataMap.minutagem_faltas_graves === "string" &&
+        dataMap.minutagem_faltas_graves.trim() &&
+        dataMap.minutagem_faltas_graves.trim().toUpperCase() !== "N/A"
+          ? dataMap.minutagem_faltas_graves.trim()
+          : "";
+      const minComuns =
+        typeof dataMap.minutagem_falhas_comuns === "string" &&
+        dataMap.minutagem_falhas_comuns.trim() &&
+        dataMap.minutagem_falhas_comuns.trim().toUpperCase() !== "N/A"
+          ? dataMap.minutagem_falhas_comuns.trim()
+          : "";
+
       if (rawTranscricao.trim()) {
         setTranscricaoInput(
           rawTranscricao
@@ -334,33 +363,40 @@ function AnalystEvaluationFlowInner() {
             .trim()
         );
         appliedAny = true;
-      } else {
-        const minGraves =
-          typeof dataMap.minutagem_faltas_graves === "string" &&
-          dataMap.minutagem_faltas_graves !== "N/A"
-            ? dataMap.minutagem_faltas_graves.trim()
-            : "";
-        const minComuns =
-          typeof dataMap.minutagem_falhas_comuns === "string" &&
-          dataMap.minutagem_falhas_comuns !== "N/A"
-            ? dataMap.minutagem_falhas_comuns.trim()
-            : "";
-        const combinedMinutagem = [minGraves, minComuns]
-          .filter(Boolean)
-          .join("\n");
-        if (combinedMinutagem) {
-          setTranscricaoInput(combinedMinutagem);
-          appliedAny = true;
-        }
       }
+
+      const formatTimestampedLines = (raw: string) =>
+        raw
+          .split(/\s*;\s*|\n+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((line) => (line.startsWith("•") ? line : `• ${line}`))
+          .join("\n");
 
       const rawObs =
         (typeof dataMap.Observacoes === "string" && dataMap.Observacoes) ||
         (typeof dataMap.Breve_resumo_do_atendimento === "string" &&
           dataMap.Breve_resumo_do_atendimento) ||
         "";
-      if (rawObs.trim()) {
-        setGeneralFeedback(rawObs.trim());
+
+      const timestampBlocks: string[] = [];
+      if (minGraves && !rawObs.includes(minGraves)) {
+        timestampBlocks.push(
+          `Minutagem de Faltas Graves (Minuto e Segundo):\n${formatTimestampedLines(minGraves)}`
+        );
+      }
+      if (minComuns && !rawObs.includes(minComuns)) {
+        timestampBlocks.push(
+          `Minutagem de Falhas / Observações (Minuto e Segundo):\n${formatTimestampedLines(minComuns)}`
+        );
+      }
+
+      const fullObsWithTimestamps = [rawObs.trim(), ...timestampBlocks]
+        .filter(Boolean)
+        .join("\n\n");
+
+      if (fullObsWithTimestamps) {
+        setGeneralFeedback(fullObsWithTimestamps);
         appliedAny = true;
       }
 
@@ -374,7 +410,12 @@ function AnalystEvaluationFlowInner() {
         typeof dataMap.Motivo_falta_grave === "string" &&
         dataMap.Motivo_falta_grave
       ) {
-        setMotivoFaltaGrave(dataMap.Motivo_falta_grave.trim());
+        const rawMotivo = dataMap.Motivo_falta_grave.trim();
+        const enrichedMotivo =
+          minGraves && !rawMotivo.includes("[")
+            ? `${minGraves} — ${rawMotivo}`
+            : rawMotivo;
+        setMotivoFaltaGrave(enrichedMotivo);
       }
 
       if (targetForm && targetForm.items.length > 0) {
@@ -428,12 +469,13 @@ function AnalystEvaluationFlowInner() {
     []
   );
 
-  // Polling automático na Etapa 3 enquanto aguarda retorno da transcrição e respostas (true/false) do webhook n8n
+  // Polling automático na Etapa 3 enquanto aguarda retorno da transcrição completa e respostas (true/false) do webhook n8n
   useEffect(() => {
+    const hasFullTranscript = transcricaoInput.trim().length >= 600;
     if (
       step !== 3 ||
       !selectedCall?.id ||
-      aiSyncStatus === "COMPLETED" ||
+      (aiSyncStatus === "COMPLETED" && hasFullTranscript) ||
       aiSyncStatus === "ERROR"
     ) {
       return;
@@ -455,7 +497,18 @@ function AnalystEvaluationFlowInner() {
         }
         if (meta.aiEvaluationData) {
           setAiWebhookError(null);
-          applyAiEvaluationPayload(meta.aiEvaluationData, activeFormForCall);
+          const payloadWithTranscricao =
+            typeof meta.aiEvaluationData === "object" &&
+            meta.aiEvaluationData !== null
+              ? {
+                  ...(meta.aiEvaluationData as Record<string, unknown>),
+                  ...(typeof meta.transcricao === "string" &&
+                  meta.transcricao.trim()
+                    ? { transcricao: meta.transcricao }
+                    : {}),
+                }
+              : meta.aiEvaluationData;
+          applyAiEvaluationPayload(payloadWithTranscricao, activeFormForCall);
         } else if (
           typeof meta.transcricao === "string" &&
           meta.transcricao.trim()
@@ -485,6 +538,7 @@ function AnalystEvaluationFlowInner() {
     step,
     selectedCall?.id,
     aiSyncStatus,
+    transcricaoInput,
     activeFormForCall,
     applyAiEvaluationPayload,
   ]);
@@ -844,42 +898,28 @@ function AnalystEvaluationFlowInner() {
     },
     onSuccess: (createdCall) => {
       setSelectedCall(createdCall);
+      setTranscricaoInput("");
+      setAiWebhookError(null);
       setAiSyncStatus("PROCESSING");
       queryClient.invalidateQueries({ queryKey: ["calls-list"] });
       setStep(3);
 
-      // Caso o servidor já tenha retornado metadados de IA ou para disparar direto ao webhook configurado
+      // O backend (CallRecordService) faz o upload do áudio para o Directus/R2 e dispara o webhook n8n;
+      // o useEffect de polling da Etapa 3 busca o resultado completo assim que o n8n concluir.
       const meta = createdCall.metadata || {};
-      if (meta.aiEvaluationData) {
-        applyAiEvaluationPayload(meta.aiEvaluationData, activeFormForCall);
-      } else if (AUDIO_EVALUATION_WEBHOOK_URL) {
-        fetch(AUDIO_EVALUATION_WEBHOOK_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: createdCall.id,
-            id_formullario: createdCall.id,
-            formTemplateId: activeFormForCall?.id || "",
-            externalCallId: createdCall.externalCallId,
-            ligacao: createdCall.audioUrl,
-            audioUrl: createdCall.audioUrl,
-            telefone: createdCall.customerIdentifier,
-            Telefone_Portabilidade: createdCall.customerIdentifier,
-            Operador: analystId,
-            Nome: customerNameInput,
-            CPF: customerCpfInput,
-            Proposta: proposalInput,
-            Data_da_venda: saleDateInput,
-          }),
-        })
-          .then(async (r) => {
-            if (!r.ok) return;
-            const json = await r.json();
-            applyAiEvaluationPayload(json, activeFormForCall);
-          })
-          .catch(() => {
-            // O backend já faz o disparo assíncrono e o polling busca o resultado
-          });
+      if (meta.aiEvaluationData || meta.transcricao) {
+        const payloadWithTranscricao =
+          typeof meta.aiEvaluationData === "object" &&
+          meta.aiEvaluationData !== null
+            ? {
+                ...(meta.aiEvaluationData as Record<string, unknown>),
+                ...(typeof meta.transcricao === "string" &&
+                meta.transcricao.trim()
+                  ? { transcricao: meta.transcricao }
+                  : {}),
+              }
+            : { transcricao: meta.transcricao };
+        applyAiEvaluationPayload(payloadWithTranscricao, activeFormForCall);
       }
     },
     onError: (err) => {
@@ -1894,6 +1934,33 @@ function AnalystEvaluationFlowInner() {
                       onClick={async () => {
                         if (!selectedCall?.id) return;
                         setAiWebhookError(null);
+                        try {
+                          const latest = await callsApi.getById(selectedCall.id);
+                          const meta = latest.metadata || {};
+                          if (
+                            typeof meta.transcricao === "string" &&
+                            meta.transcricao.trim().length > 200
+                          ) {
+                            const payloadWithTranscricao =
+                              typeof meta.aiEvaluationData === "object" &&
+                              meta.aiEvaluationData !== null
+                                ? {
+                                    ...(meta.aiEvaluationData as Record<
+                                      string,
+                                      unknown
+                                    >),
+                                    transcricao: meta.transcricao,
+                                  }
+                                : { transcricao: meta.transcricao };
+                            applyAiEvaluationPayload(
+                              payloadWithTranscricao,
+                              activeFormForCall
+                            );
+                            return;
+                          }
+                        } catch {
+                          // Prossegue para reenvio do webhook
+                        }
                         setAiSyncStatus("PROCESSING");
                         await callsApi
                           .retryAudioWebhook(selectedCall.id)
@@ -1914,7 +1981,7 @@ function AnalystEvaluationFlowInner() {
                   )}
 
                   <textarea
-                    rows={7}
+                    rows={10}
                     value={transcricaoInput}
                     onChange={(e) => setTranscricaoInput(e.target.value)}
                     placeholder="A transcrição gerada pelo webhook aparecerá automaticamente aqui (ex: [00:02] Atendente: Alô, boa tarde...). Você também pode colar ou editar o texto."
@@ -2111,14 +2178,14 @@ function AnalystEvaluationFlowInner() {
                           <label className="block text-xs font-mono text-zinc-300 mb-1">
                             Motivo_falta_grave
                           </label>
-                          <input
-                            type="text"
+                          <textarea
+                            rows={4}
                             value={motivoFaltaGrave}
                             onChange={(e) =>
                               setMotivoFaltaGrave(e.target.value)
                             }
                             placeholder="Descreva o motivo caso haja falta grave..."
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
+                            className="w-full p-3 rounded-xl border border-zinc-800 bg-[#121215] text-xs font-mono leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
                           />
                         </div>
                       </div>
@@ -2132,18 +2199,35 @@ function AnalystEvaluationFlowInner() {
                         </label>
                         <div className="flex flex-wrap items-center gap-1.5">
                           {[
-                            "Possui vício de linguagem (né / tá / aí). ",
-                            "Não menciona os canais digitais da administradora. ",
-                            "Não solicita confirmação de CPF/e-mail/telefone secundário. ",
+                            "Possui vício de linguagem (né / tá / aí).",
+                            "Não menciona os canais digitais da administradora.",
+                            "Não solicita confirmação de CPF/e-mail/telefone secundário.",
                           ].map((snippet) => (
                             <button
                               key={snippet}
                               type="button"
-                              onClick={() =>
+                              onClick={() => {
+                                const audioEl = document.querySelector("audio");
+                                const curSecs =
+                                  audioEl &&
+                                  Number.isFinite(audioEl.currentTime) &&
+                                  audioEl.currentTime > 0
+                                    ? Math.floor(audioEl.currentTime)
+                                    : 0;
+                                const mm = String(
+                                  Math.floor(curSecs / 60)
+                                ).padStart(2, "0");
+                                const ss = String(curSecs % 60).padStart(
+                                  2,
+                                  "0"
+                                );
+                                const lineWithTime = `[${mm}:${ss}] ${snippet}`;
                                 setGeneralFeedback((prev) =>
-                                  prev ? `${prev}\n${snippet}` : snippet
-                                )
-                              }
+                                  prev
+                                    ? `${prev}\n• ${lineWithTime}`
+                                    : `• ${lineWithTime}`
+                                );
+                              }}
                               className="px-2 py-0.5 rounded border border-zinc-800 bg-[#121215] hover:border-zinc-600 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
                             >
                               <Clock className="h-2.5 w-2.5" />
@@ -2153,11 +2237,11 @@ function AnalystEvaluationFlowInner() {
                         </div>
                       </div>
                       <textarea
-                        rows={5}
+                        rows={7}
                         value={generalFeedback}
                         onChange={(e) => setGeneralFeedback(e.target.value)}
                         placeholder="Breve resumo do atendimento / Observações da monitoria..."
-                        className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                        className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
                       />
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
