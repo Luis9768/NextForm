@@ -34,8 +34,8 @@ public class DemoAudioService {
     private final R2ObjectStorageService r2ObjectStorageService;
 
     public DemoAudioService(
-            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}") String directusBaseUrl,
-            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}}") String directusApiToken,
+            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String directusBaseUrl,
+            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String directusApiToken,
             R2ObjectStorageService r2ObjectStorageService
     ) {
         this.directusBaseUrl = directusBaseUrl;
@@ -90,6 +90,11 @@ public class DemoAudioService {
             Path uploadDir = Paths.get("./data/uploads").toAbsolutePath().normalize();
             Files.createDirectories(uploadDir);
 
+            Path directFile = uploadDir.resolve(fileId).normalize();
+            if (directFile.startsWith(uploadDir) && Files.exists(directFile)) {
+                return resolveUploadedFileAudioSlice(fileId, rangeHeader);
+            }
+
             String cachedMp3 = "directus_" + fileId + ".mp3";
             String cachedWav = "directus_" + fileId + ".wav";
 
@@ -100,17 +105,22 @@ public class DemoAudioService {
                 return resolveUploadedFileAudioSlice(cachedWav, rangeHeader);
             }
 
-            // Verifica se já está salvo no Cloudflare R2
+            // Verifica se já está salvo no Cloudflare R2 (testando chave direta e prefixos directus_)
             if (r2ObjectStorageService.isConfigured()) {
-                var r2Mp3 = r2ObjectStorageService.downloadAudioObject(cachedMp3);
-                if (r2Mp3.isPresent()) {
-                    Files.write(uploadDir.resolve(cachedMp3), r2Mp3.get());
-                    return resolveUploadedFileAudioSlice(cachedMp3, rangeHeader);
-                }
-                var r2Wav = r2ObjectStorageService.downloadAudioObject(cachedWav);
-                if (r2Wav.isPresent()) {
-                    Files.write(uploadDir.resolve(cachedWav), r2Wav.get());
-                    return resolveUploadedFileAudioSlice(cachedWav, rangeHeader);
+                java.util.List<String> candidateKeys = java.util.List.of(
+                        fileId,
+                        cachedMp3,
+                        cachedWav,
+                        fileId + ".mp3",
+                        fileId + ".wav"
+                );
+                for (String key : candidateKeys) {
+                    var r2Data = r2ObjectStorageService.downloadAudioObject(key);
+                    if (r2Data.isPresent()) {
+                        String localTarget = (key.endsWith(".mp3") || key.endsWith(".wav")) ? key : cachedMp3;
+                        Files.write(uploadDir.resolve(localTarget), r2Data.get());
+                        return resolveUploadedFileAudioSlice(localTarget, rangeHeader);
+                    }
                 }
             }
 

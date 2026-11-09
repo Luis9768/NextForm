@@ -62,10 +62,10 @@ public class CallRecordService {
     @Value("${app.integrations.audio-evaluation-webhook.url:${AUDIO_EVALUATION_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7}}")
     private String audioEvaluationWebhookUrl;
 
-    @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}")
+    @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}")
     private String directusBaseUrl;
 
-    @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}}")
+    @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}")
     private String directusApiToken;
 
     @Transactional
@@ -407,10 +407,13 @@ public class CallRecordService {
                     ? existingDirectusId
                     : tryUploadAudioToDirectus(primaryAudioBytes, primaryOriginalName);
 
-            // Se a ligação era de um teste anterior sem arquivo físico salvo, usa o UUID real de áudio no Directus
+            String r2FileKey = (audioUrl != null && audioUrl.contains("/api/v1/audio/files/"))
+                    ? audioUrl.substring(audioUrl.lastIndexOf("/") + 1)
+                    : extCallId;
+
             String effectiveLigacaoId = (directusUploadedId != null && !directusUploadedId.isBlank())
                     ? directusUploadedId
-                    : "773d4f70-aac8-4a29-8854-b7b8384fa9d3";
+                    : r2FileKey;
 
             String directusReturnId = initialMeta.get("returnAudioFileId") != null
                     ? initialMeta.get("returnAudioFileId").toString()
@@ -421,6 +424,12 @@ public class CallRecordService {
                     Map<String, Object> m = new LinkedHashMap<>(cr.getMetadata() != null ? cr.getMetadata() : Map.of());
                     if (directusUploadedId != null) {
                         m.put("directusAudioFileId", directusUploadedId);
+                        if (primaryAudioBytes != null && primaryAudioBytes.length > 0 && r2ObjectStorageService.isConfigured()) {
+                            String ext = (primaryOriginalName != null && primaryOriginalName.toLowerCase().endsWith(".wav")) ? ".wav" : ".mp3";
+                            String ct = ext.equals(".wav") ? "audio/wav" : "audio/mpeg";
+                            r2ObjectStorageService.uploadAudioObject(directusUploadedId, primaryAudioBytes, ct);
+                            r2ObjectStorageService.uploadAudioObject("directus_" + directusUploadedId + ext, primaryAudioBytes, ct);
+                        }
                     }
                     if (directusReturnId != null) {
                         m.put("returnAudioFileId", directusReturnId);
@@ -432,7 +441,10 @@ public class CallRecordService {
 
             String cleanDirectusBase = (directusBaseUrl != null && !directusBaseUrl.isBlank())
                     ? directusBaseUrl.trim().replaceAll("/+$", "")
-                    : "https://crm-directus.xjbony.easypanel.host";
+                    : "";
+
+            String presignedR2Url = r2ObjectStorageService.generatePresignedGetUrl(r2FileKey, 86400)
+                    .orElse(null);
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("id", callIdStr);
@@ -447,7 +459,13 @@ public class CallRecordService {
             payload.put("Audio_Chamada", effectiveLigacaoId);
             payload.put("audio_chamada", effectiveLigacaoId);
             payload.put("Audio_Ligacao", effectiveLigacaoId);
-            payload.put("directusAssetUrl", cleanDirectusBase + "/assets/" + effectiveLigacaoId);
+            payload.put("r2ObjectKey", r2FileKey);
+            if (presignedR2Url != null) {
+                payload.put("r2PresignedUrl", presignedR2Url);
+            }
+            if (!cleanDirectusBase.isEmpty()) {
+                payload.put("directusAssetUrl", cleanDirectusBase + "/assets/" + effectiveLigacaoId);
+            }
             if (directusReturnId != null && !directusReturnId.isBlank()) {
                 payload.put("Ligacao_Retorno", directusReturnId);
                 payload.put("Audio_Ligacao_Retorno", directusReturnId);

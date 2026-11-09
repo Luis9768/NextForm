@@ -78,8 +78,8 @@ services:
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
       R2_REGION: ${R2_REGION:-auto}
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
-      DIRECTUS_BASE_URL: ${DIRECTUS_BASE_URL:-https://crm-directus.xjbony.easypanel.host}
-      DIRECTUS_API_TOKEN: ${DIRECTUS_API_TOKEN:-te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}
+      DIRECTUS_BASE_URL: ${DIRECTUS_BASE_URL:-}
+      DIRECTUS_API_TOKEN: ${DIRECTUS_API_TOKEN:-}
       DIRECTUS_INITIAL_EVAL_LIMIT: ${DIRECTUS_INITIAL_EVAL_LIMIT:--1}
       CUSTOMER_WEBHOOK_URL: ${CUSTOMER_WEBHOOK_URL:-}
       AUDIO_EVALUATION_WEBHOOK_URL: ${AUDIO_EVALUATION_WEBHOOK_URL:-https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7}
@@ -109,7 +109,8 @@ services:
     restart: unless-stopped
     mem_limit: 320m
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       NODE_OPTIONS: "--max-old-space-size=256"

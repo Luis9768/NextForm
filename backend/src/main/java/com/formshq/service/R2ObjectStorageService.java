@@ -158,12 +158,69 @@ public class R2ObjectStorageService {
 
             HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() == 200 && response.body() != null && response.body().length > 0) {
+                log.info("Áudio recuperado com sucesso do Cloudflare R2: bucket={}, key={}, bytes={}",
+                        bucket, safeKey, response.body().length);
                 return Optional.of(response.body());
             }
+            log.warn("Não foi possível recuperar áudio do Cloudflare R2 (status={}): bucket={}, key={}",
+                    response.statusCode(), bucket, safeKey);
         } catch (Exception e) {
-            log.debug("Áudio '{}' não encontrado ou indisponível no Cloudflare R2: {}", objectKey, e.getMessage());
+            log.warn("Erro ao baixar áudio '{}' do Cloudflare R2: {}", objectKey, e.getMessage());
         }
         return Optional.empty();
+    }
+
+    /**
+     * Gera uma URL pré-assinada (AWS Signature V4 Query Auth) para leitura direta do objeto no Cloudflare R2,
+     * funcionando mesmo quando R2_PUBLIC_URL não está configurada e o bucket é privado.
+     */
+    public Optional<String> generatePresignedGetUrl(String objectKey, int expirationSeconds) {
+        if (!isConfigured() || objectKey == null || objectKey.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            String safeKey = sanitizeKey(objectKey);
+            String canonicalUri = "/" + encodeUriSegment(bucket) + "/" + encodeUriSegment(safeKey);
+            URI targetUri = URI.create(endpoint + canonicalUri);
+            String host = targetUri.getHost() + (targetUri.getPort() > 0 ? ":" + targetUri.getPort() : "");
+
+            ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+            String amzDate = AMZ_DATE_FORMAT.format(now);
+            String dateStamp = DATE_STAMP_FORMAT.format(now);
+            String credentialScope = dateStamp + "/" + region + "/s3/aws4_request";
+            String credential = accessKeyId + "/" + credentialScope;
+
+            String canonicalQueryString = "X-Amz-Algorithm=AWS4-HMAC-SHA256"
+                    + "&X-Amz-Credential=" + encodeUriSegment(credential)
+                    + "&X-Amz-Date=" + amzDate
+                    + "&X-Amz-Expires=" + Math.max(60, Math.min(expirationSeconds, 604800))
+                    + "&X-Amz-SignedHeaders=host";
+
+            String canonicalHeaders = "host:" + host.toLowerCase() + "\n";
+            String signedHeaders = "host";
+            String payloadHash = "UNSIGNED-PAYLOAD";
+
+            String canonicalRequest = "GET\n"
+                    + canonicalUri + "\n"
+                    + canonicalQueryString + "\n"
+                    + canonicalHeaders + "\n"
+                    + signedHeaders + "\n"
+                    + payloadHash;
+
+            String stringToSign = "AWS4-HMAC-SHA256\n"
+                    + amzDate + "\n"
+                    + credentialScope + "\n"
+                    + sha256Hex(canonicalRequest.getBytes(StandardCharsets.UTF_8));
+
+            byte[] signingKey = getSignatureKey(secretAccessKey, dateStamp, region, "s3");
+            String signature = HexFormat.of().formatHex(hmacSha256(signingKey, stringToSign));
+
+            String presignedUrl = endpoint + canonicalUri + "?" + canonicalQueryString + "&X-Amz-Signature=" + signature;
+            return Optional.of(presignedUrl);
+        } catch (Exception e) {
+            log.warn("Falha ao gerar URL pré-assinada do R2 para '{}': {}", objectKey, e.getMessage());
+            return Optional.empty();
+        }
     }
 
     public String resolveStoredAudioUrl(String fileName) {

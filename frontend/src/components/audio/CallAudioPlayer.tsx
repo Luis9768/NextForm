@@ -39,10 +39,12 @@ export function CallAudioPlayer({
   const [usingFallbackStream, setUsingFallbackStream] = useState(false);
   const [audioUnavailable, setAudioUnavailable] = useState(false);
 
-  const isDirectusAudio =
+  const isRealBackendAudio =
     Boolean(audioUrl) &&
-    (audioUrl.includes("/audio/directus/") ||
+    (audioUrl.includes("/audio/files/") ||
+      audioUrl.includes("/audio/directus/") ||
       audioUrl.includes("crm-directus") ||
+      audioUrl.includes("r2.cloudflarestorage.com") ||
       (externalCallId && externalCallId.startsWith("directus_")));
 
   const fallbackStreamUrl = `${API_BASE_URL}/audio/${encodeURIComponent(
@@ -65,7 +67,7 @@ export function CallAudioPlayer({
   })();
 
   const effectiveSrc =
-    !isDirectusAudio && (usingFallbackStream || isMockExternalHost)
+    !isRealBackendAudio && (usingFallbackStream || isMockExternalHost)
       ? fallbackStreamUrl
       : resolvedAudioUrl;
 
@@ -89,7 +91,7 @@ export function CallAudioPlayer({
         setIsPlaying(true);
       }
     } catch {
-      if (isDirectusAudio) {
+      if (isRealBackendAudio) {
         setAudioUnavailable(true);
         setIsPlaying(false);
       } else if (!usingFallbackStream) {
@@ -174,7 +176,7 @@ export function CallAudioPlayer({
         }}
         onEnded={() => setIsPlaying(false)}
         onError={() => {
-          if (isDirectusAudio) {
+          if (isRealBackendAudio) {
             setAudioUnavailable(true);
             setIsPlaying(false);
           } else if (!usingFallbackStream) {

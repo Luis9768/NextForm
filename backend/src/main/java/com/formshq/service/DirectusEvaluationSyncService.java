@@ -87,8 +87,8 @@ public class DirectusEvaluationSyncService {
             PasswordEncoder passwordEncoder,
             ObjectMapper objectMapper,
             DemoAudioService demoAudioService,
-            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}") String configuredDirectusBaseUrl,
-            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}}") String configuredDirectusToken,
+            @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String configuredDirectusBaseUrl,
+            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String configuredDirectusToken,
             @Value("${app.security.bootstrap-admin.email:}") String bootstrapAdminEmail
     ) {
         this.evaluationRepository = evaluationRepository;
@@ -876,7 +876,7 @@ public class DirectusEvaluationSyncService {
                 }
                 if (returnAudioUuid != null) {
                     metadata.put("returnAudioFileId", returnAudioUuid);
-                    metadata.put("returnAudioUrl", "/api/v1/audio/directus/" + returnAudioUuid);
+                    metadata.putIfAbsent("returnAudioUrl", "/api/v1/audio/directus/" + returnAudioUuid);
                 }
                 String ticket = extractString(item, "Ticket", null);
                 if (ticket != null) {
@@ -907,8 +907,14 @@ public class DirectusEvaluationSyncService {
                     existingCall.setCustomer(customer);
                     existingCall.setCustomerIdentifier(customer.getPhone());
                     existingCall.setCallDate(callDate);
-                    existingCall.setDurationSeconds(durationSeconds);
-                    existingCall.setAudioUrl(audioUrl);
+                    if (existingCall.getDurationSeconds() == null || existingCall.getDurationSeconds() == 210 || durationSeconds != 210) {
+                        existingCall.setDurationSeconds(durationSeconds);
+                    }
+                    // Preserva a URL de áudio enviada manualmente (/api/v1/audio/files/...) que já aponta para o disco local e para o bucket Cloudflare R2
+                    String currentAudioUrl = existingCall.getAudioUrl();
+                    if (currentAudioUrl == null || !currentAudioUrl.contains("/api/v1/audio/files/")) {
+                        existingCall.setAudioUrl(audioUrl);
+                    }
                     existingCall.setStatus(CallStatus.AVALIADA);
                     existingCall.setMetadata(metadata);
 

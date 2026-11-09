@@ -67,8 +67,8 @@ app:
       public-url: ${R2_PUBLIC_URL:}
   integrations:
     directus:
-      base-url: ${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}
-      api-token: ${DIRECTUS_API_TOKEN:te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}
+      base-url: ${DIRECTUS_BASE_URL:}
+      api-token: ${DIRECTUS_API_TOKEN:}
     customer-api:
       base-url: ${EXTERNAL_CUSTOMER_API_URL:https://api.crm-externo.empresa.com/v1}
       api-token: ${EXTERNAL_CUSTOMER_API_TOKEN:crm-external-bearer-token-2026}
