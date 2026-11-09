@@ -242,13 +242,117 @@ export const callsApi = {
     sector?: string;
     formTemplateId?: string;
   }): Promise<CallRecord> => {
+    const optimizeLargeAudioFile = async (file: File): Promise<File> => {
+      const MAX_RAW_BYTES = 8 * 1024 * 1024; // 8 MiB
+      if (
+        typeof window === "undefined" ||
+        file.size <= MAX_RAW_BYTES ||
+        (!file.name.toLowerCase().endsWith(".wav") &&
+          !file.type.toLowerCase().includes("wav"))
+      ) {
+        return file;
+      }
+
+      try {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext })
+            .webkitAudioContext;
+        if (!AudioCtx) return file;
+
+        const arrayBuffer = await file.arrayBuffer();
+        const decodeCtx = new AudioCtx();
+        let decoded: AudioBuffer;
+        try {
+          decoded = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
+        } finally {
+          decodeCtx.close().catch(() => {});
+        }
+
+        const durationSecs = Math.max(1, decoded.duration);
+        // Mantém o WAV Mono 16-bit abaixo de ~8.8 MiB para nunca esbarrar em limites de proxy (10 MB) ou Whisper (25 MB)
+        const targetMaxBytes = 8.8 * 1024 * 1024;
+        const maxRateForBudget = Math.floor(targetMaxBytes / (durationSecs * 2));
+        const targetSampleRate = Math.min(
+          8000,
+          Math.max(4800, maxRateForBudget)
+        );
+        const targetLength = Math.max(
+          1,
+          Math.ceil(decoded.duration * targetSampleRate)
+        );
+
+        const offlineCtx = new OfflineAudioContext(
+          1,
+          targetLength,
+          targetSampleRate
+        );
+        const source = offlineCtx.createBufferSource();
+        source.buffer = decoded;
+        source.connect(offlineCtx.destination);
+        source.start(0);
+
+        const rendered = await offlineCtx.startRendering();
+        const channelData = rendered.getChannelData(0);
+        const pcmByteLength = channelData.length * 2;
+        const wavBuffer = new ArrayBuffer(44 + pcmByteLength);
+        const view = new DataView(wavBuffer);
+
+        const writeStr = (offset: number, str: string) => {
+          for (let i = 0; i < str.length; i++) {
+            view.setUint8(offset + i, str.charCodeAt(i));
+          }
+        };
+
+        writeStr(0, "RIFF");
+        view.setUint32(4, 36 + pcmByteLength, true);
+        writeStr(8, "WAVE");
+        writeStr(12, "fmt ");
+        view.setUint32(16, 16, true); // Subchunk1Size (PCM)
+        view.setUint16(20, 1, true); // AudioFormat (1 = Linear PCM)
+        view.setUint16(22, 1, true); // NumChannels (1 = Mono)
+        view.setUint32(24, targetSampleRate, true);
+        view.setUint32(28, targetSampleRate * 2, true); // ByteRate
+        view.setUint16(32, 2, true); // BlockAlign
+        view.setUint16(34, 16, true); // BitsPerSample
+        writeStr(36, "data");
+        view.setUint32(40, pcmByteLength, true);
+
+        let offset = 44;
+        for (let i = 0; i < channelData.length; i++) {
+          const sample = Math.max(-1, Math.min(1, channelData[i]));
+          view.setInt16(
+            offset,
+            sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+            true
+          );
+          offset += 2;
+        }
+
+        if (wavBuffer.byteLength >= file.size) {
+          return file;
+        }
+
+        return new File([wavBuffer], file.name, {
+          type: "audio/wav",
+          lastModified: file.lastModified,
+        });
+      } catch {
+        return file;
+      }
+    };
+
     const formData = new FormData();
     if (params.files && params.files.length > 0) {
-      params.files.forEach((f) => {
+      const optimizedFiles = await Promise.all(
+        params.files.map((f) => optimizeLargeAudioFile(f))
+      );
+      optimizedFiles.forEach((f) => {
         formData.append("files", f);
       });
     } else if (params.file) {
-      formData.append("files", params.file);
+      const optimizedFile = await optimizeLargeAudioFile(params.file);
+      formData.append("files", optimizedFile);
     }
     formData.append("analystId", params.analystId);
     formData.append("customerPhone", params.customerPhone);
@@ -285,6 +389,9 @@ export const callsApi = {
       headers: {
         "Content-Type": undefined,
       },
+      timeout: 300000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
     });
     return data;
   },
