@@ -247,9 +247,7 @@ export const callsApi = {
       params.files.forEach((f) => {
         formData.append("files", f);
       });
-      formData.append("file", params.files[0]);
     } else if (params.file) {
-      formData.append("file", params.file);
       formData.append("files", params.file);
     }
     formData.append("analystId", params.analystId);

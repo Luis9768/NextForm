@@ -97,7 +97,7 @@ public class R2ObjectStorageService {
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(targetUri)
-                    .timeout(Duration.ofSeconds(45))
+                    .timeout(Duration.ofSeconds(180))
                     .header("x-amz-date", amzDate)
                     .header("x-amz-content-sha256", payloadHash)
                     .header("Authorization", authorization)

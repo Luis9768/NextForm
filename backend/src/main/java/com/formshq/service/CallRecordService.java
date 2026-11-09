@@ -225,9 +225,6 @@ public class CallRecordService {
                         secondaryOriginalName = originalName;
                     }
 
-                    String contentType = currentFile.getContentType() != null ? currentFile.getContentType() : "audio/mpeg";
-                    r2ObjectStorageService.uploadAudioObject(storedFileName, fileBytes, contentType);
-
                     Path targetPath = uploadDir.resolve(storedFileName);
                     Files.write(targetPath, fileBytes);
 
@@ -419,12 +416,10 @@ public class CallRecordService {
                     ? initialMeta.get("returnAudioFileId").toString()
                     : tryUploadAudioToDirectus(secondaryAudioBytes, secondaryOriginalName);
 
-            if (directusUploadedId != null && primaryAudioBytes != null && primaryAudioBytes.length > 0 && r2ObjectStorageService.isConfigured()) {
+            if (primaryAudioBytes != null && primaryAudioBytes.length > 0 && r2ObjectStorageService.isConfigured()) {
                 String ext = (primaryOriginalName != null && primaryOriginalName.toLowerCase().endsWith(".wav")) ? ".wav" : ".mp3";
                 String ct = ext.equals(".wav") ? "audio/wav" : "audio/mpeg";
-                r2ObjectStorageService.uploadAudioObject(directusUploadedId, primaryAudioBytes, ct);
-                r2ObjectStorageService.uploadAudioObject(directusUploadedId + ext, primaryAudioBytes, ct);
-                r2ObjectStorageService.uploadAudioObject("directus_" + directusUploadedId + ext, primaryAudioBytes, ct);
+                r2ObjectStorageService.uploadAudioObject(r2FileKey, primaryAudioBytes, ct);
             }
 
             if (directusUploadedId != null || directusReturnId != null) {

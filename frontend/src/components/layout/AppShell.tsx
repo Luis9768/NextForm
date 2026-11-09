@@ -803,7 +803,12 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         </AnimatePresence>
 
         <div className="flex-1 h-full flex flex-col min-w-0 bg-white dark:bg-[#0b0b0d] overflow-hidden">
-          <header className="h-14 px-3 sm:px-6 border-b border-zinc-200 dark:border-zinc-800/80 flex items-center justify-between gap-2 sm:gap-4 shrink-0 bg-white/95 dark:bg-[#0b0b0d]/95 backdrop-blur z-20">
+          <header
+            className={cn(
+              "h-14 px-3 sm:px-6 border-b border-zinc-200 dark:border-zinc-800/80 items-center justify-between gap-2 sm:gap-4 shrink-0 bg-white/95 dark:bg-[#0b0b0d]/95 backdrop-blur z-20",
+              pathname.startsWith("/analysts/") ? "flex md:hidden" : "flex"
+            )}
+          >
             <div className="flex items-center gap-2.5 min-w-0">
               <button
                 type="button"
@@ -950,8 +955,24 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             )}
           </nav>
 
-          <main className="flex-1 overflow-y-auto p-3.5 sm:p-6 bg-zinc-50/40 dark:bg-[#0b0b0d]">
-            <div className="max-w-7xl mx-auto">{children}</div>
+          <main
+            className={cn(
+              "flex-1 bg-zinc-50/40 dark:bg-[#0b0b0d]",
+              pathname.startsWith("/analysts/")
+                ? "overflow-hidden p-0 flex flex-col min-h-0"
+                : "overflow-y-auto p-3.5 sm:p-6"
+            )}
+          >
+            <div
+              className={cn(
+                "mx-auto w-full",
+                pathname.startsWith("/analysts/")
+                  ? "flex-1 flex flex-col min-h-0"
+                  : "max-w-7xl"
+              )}
+            >
+              {children}
+            </div>
           </main>
         </div>
       </div>

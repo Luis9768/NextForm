@@ -21,25 +21,36 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Copy,
+  Edit3,
   FileAudio,
   FileCheck2,
   FolderKanban,
   Hash,
   Headphones,
   Loader2,
+  MessageSquare,
+  Pause,
   Phone,
+  Play,
   Plus,
   RefreshCw,
+  RotateCcw,
+  RotateCw,
+  Search,
   ShieldAlert,
   Trash2,
   UploadCloud,
   User,
   UserCheck,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
 import { useAuth } from "@/context/AuthContext";
 import {
+  API_BASE_URL,
   callsApi,
   customersApi,
   evaluationsApi,
@@ -189,6 +200,163 @@ function resolveTemplateForSector(
   );
 }
 
+interface TranscriptTurn {
+  index: number;
+  timestampLabel: string;
+  startSeconds: number;
+  endSeconds: number;
+  speaker: "ATENDENTE" | "CLIENTE" | "OUTRO";
+  speakerLabel: string;
+  tone?: string;
+  text: string;
+}
+
+function parseTranscriptTurns(rawText: string): TranscriptTurn[] {
+  if (!rawText || !rawText.trim()) return [];
+  const lines = rawText.split(/\r?\n/);
+  const parsed: TranscriptTurn[] = [];
+  const lineRegex =
+    /^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]\s*(?:([^:]+?):\s*)?(.*)$/;
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(lineRegex);
+    if (match) {
+      const p1 = parseInt(match[1], 10);
+      const p2 = parseInt(match[2], 10);
+      const p3 = match[3] ? parseInt(match[3], 10) : null;
+      const startSeconds =
+        p3 !== null ? p1 * 3600 + p2 * 60 + p3 : p1 * 60 + p2;
+      const timestampLabel =
+        p3 !== null
+          ? `${String(p1).padStart(2, "0")}:${String(p2).padStart(
+              2,
+              "0"
+            )}:${String(p3).padStart(2, "0")}`
+          : `${String(p1).padStart(2, "0")}:${String(p2).padStart(2, "0")}`;
+
+      const rawSpeaker = (match[4] || "").trim();
+      const spokenText = (match[5] || "").trim();
+
+      let speaker: "ATENDENTE" | "CLIENTE" | "OUTRO" = "OUTRO";
+      let speakerLabel = rawSpeaker || "Diálogo";
+      let tone: string | undefined;
+
+      const toneMatch = rawSpeaker.match(/^([^(]+)\(([^)]+)\)$/);
+      if (toneMatch) {
+        speakerLabel = toneMatch[1].trim();
+        tone = toneMatch[2].trim();
+      }
+
+      const lowerSpk = speakerLabel.toLowerCase();
+      if (
+        lowerSpk.includes("atendente") ||
+        lowerSpk.includes("operador") ||
+        lowerSpk.includes("agente") ||
+        lowerSpk.includes("consultor")
+      ) {
+        speaker = "ATENDENTE";
+        speakerLabel = "Agente";
+      } else if (
+        lowerSpk.includes("cliente") ||
+        lowerSpk.includes("usuário") ||
+        lowerSpk.includes("usuario")
+      ) {
+        speaker = "CLIENTE";
+        speakerLabel = "Cliente";
+      }
+
+      parsed.push({
+        index: parsed.length,
+        timestampLabel,
+        startSeconds,
+        endSeconds: startSeconds + 8,
+        speaker,
+        speakerLabel,
+        tone,
+        text: spokenText || trimmed,
+      });
+    } else if (parsed.length > 0) {
+      parsed[parsed.length - 1].text += ` ${trimmed}`;
+    } else {
+      parsed.push({
+        index: 0,
+        timestampLabel: "00:00",
+        startSeconds: 0,
+        endSeconds: 10,
+        speaker: "OUTRO",
+        speakerLabel: "Transcrição",
+        text: trimmed,
+      });
+    }
+  }
+
+  for (let i = 0; i < parsed.length - 1; i++) {
+    const nextStart = parsed[i + 1].startSeconds;
+    if (nextStart > parsed[i].startSeconds) {
+      parsed[i].endSeconds = nextStart;
+    }
+  }
+  return parsed;
+}
+
+interface WaveformMarker {
+  seconds: number;
+  label: string;
+  description: string;
+  isFatal: boolean;
+}
+
+function extractWaveformMarkers(
+  motivoFaltaGrave: string,
+  generalFeedback: string,
+  fatalTriggered: boolean
+): WaveformMarker[] {
+  const markers: WaveformMarker[] = [];
+  const seenSecs = new Set<number>();
+
+  const scanText = (text: string, isFatalSource: boolean) => {
+    if (!text || text === "N/A") return;
+    const regex = /\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]([^;\n•\[]*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(text)) !== null) {
+      const p1 = parseInt(m[1], 10);
+      const p2 = parseInt(m[2], 10);
+      const p3 = m[3] ? parseInt(m[3], 10) : null;
+      const secs = p3 !== null ? p1 * 3600 + p2 * 60 + p3 : p1 * 60 + p2;
+      if (secs >= 0 && !seenSecs.has(secs)) {
+        seenSecs.add(secs);
+        const rawDesc = (m[4] || "")
+          .replace(/^[\s—\-:]+/, "")
+          .trim()
+          .slice(0, 90);
+        markers.push({
+          seconds: secs,
+          label: `${String(p1).padStart(2, "0")}:${String(p2).padStart(
+            2,
+            "0"
+          )}`,
+          description:
+            rawDesc || (isFatalSource ? "Falta Grave" : "Observação QA"),
+          isFatal: isFatalSource && fatalTriggered,
+        });
+      }
+    }
+  };
+
+  scanText(motivoFaltaGrave, true);
+  scanText(generalFeedback, false);
+  return markers.sort((a, b) => a.seconds - b.seconds);
+}
+
+const WAVEFORM_BARS_HEIGHTS = Array.from({ length: 112 }, (_, i) => {
+  const wave1 = Math.abs(Math.sin(i * 0.43) * 58);
+  const wave2 = Math.abs(Math.cos(i * 0.19) * 32);
+  const pulse = i % 7 === 0 ? 12 : i % 3 === 0 ? 22 : 16;
+  return Math.max(14, Math.min(96, Math.round(wave1 + wave2 + pulse - 18)));
+});
+
 function AnalystEvaluationFlowInner() {
   const params = useParams<{ id: string }>();
   const analystId = params.id;
@@ -268,6 +436,194 @@ function AnalystEvaluationFlowInner() {
   const [expandedNoteItemId, setExpandedNoteItemId] = useState<string | null>(
     null
   );
+
+  // Studio Workstation (Passo 3 • Inspirado no ElevenLabs Studio)
+  const studioAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [activeRecordingIdx, setActiveRecordingIdx] = useState(0);
+  const [studioPlaying, setStudioPlaying] = useState(false);
+  const [studioCurrentTime, setStudioCurrentTime] = useState(0);
+  const [studioDuration, setStudioDuration] = useState(180);
+  const [studioSpeed, setStudioSpeed] = useState(1);
+  const [studioMuted, setStudioMuted] = useState(false);
+  const [studioVolume, setStudioVolume] = useState(0.95);
+  const [studioRightTab, setStudioRightTab] = useState<
+    "criteria" | "observations" | "customer"
+  >("criteria");
+  const [studioTranscriptMode, setStudioTranscriptMode] = useState<
+    "conversation" | "raw"
+  >("conversation");
+  const [transcriptSearch, setTranscriptSearch] = useState("");
+  const [criteriaFilter, setCriteriaFilter] = useState<"ALL" | "UNCHECKED">(
+    "ALL"
+  );
+  const [copiedVarKey, setCopiedVarKey] = useState<string | null>(null);
+
+  const activeStudioRecording =
+    recordings[activeRecordingIdx] || recordings[0] || null;
+  const activeStudioAudioUrl = useMemo(() => {
+    const raw =
+      activeStudioRecording?.previewUrl || selectedCall?.audioUrl || "";
+    if (!raw) return "";
+    if (raw.startsWith("http://localhost:8080/api/v1")) {
+      return `${API_BASE_URL}${raw.substring(
+        "http://localhost:8080/api/v1".length
+      )}`;
+    }
+    if (raw.startsWith("/api/v1")) {
+      return `${API_BASE_URL}${raw.substring("/api/v1".length)}`;
+    }
+    return raw;
+  }, [activeStudioRecording?.previewUrl, selectedCall?.audioUrl]);
+
+  useEffect(() => {
+    setStudioPlaying(false);
+    setStudioCurrentTime(0);
+    setStudioDuration(
+      activeStudioRecording?.durationSeconds ||
+        selectedCall?.durationSeconds ||
+        180
+    );
+  }, [
+    activeRecordingIdx,
+    activeStudioAudioUrl,
+    activeStudioRecording?.durationSeconds,
+    selectedCall?.durationSeconds,
+  ]);
+
+  const toggleStudioPlay = useCallback(async () => {
+    const audio = studioAudioRef.current;
+    if (!audio) return;
+    try {
+      if (studioPlaying) {
+        audio.pause();
+        setStudioPlaying(false);
+      } else {
+        await audio.play();
+        setStudioPlaying(true);
+      }
+    } catch {
+      setStudioPlaying(false);
+    }
+  }, [studioPlaying]);
+
+  const seekStudioAudioTo = useCallback(
+    async (targetSeconds: number, autoPlay = false) => {
+      const audio = studioAudioRef.current;
+      const clamped = Math.max(
+        0,
+        Math.min(studioDuration || 3600, targetSeconds)
+      );
+      setStudioCurrentTime(clamped);
+      if (audio) {
+        audio.currentTime = clamped;
+        if (autoPlay && !studioPlaying) {
+          try {
+            await audio.play();
+            setStudioPlaying(true);
+          } catch {
+            // Ignora bloqueio de autoplay
+          }
+        }
+      }
+    },
+    [studioDuration, studioPlaying]
+  );
+
+  const skipStudioSeconds = useCallback(
+    (delta: number) => {
+      const audio = studioAudioRef.current;
+      const base = audio ? audio.currentTime : studioCurrentTime;
+      seekStudioAudioTo(base + delta, false);
+    },
+    [studioCurrentTime, seekStudioAudioTo]
+  );
+
+  // Atalhos de Teclado Ergonômicos na Etapa 3 (Espaço = Play/Pause, Setas = ±5s)
+  useEffect(() => {
+    if (step !== 3) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
+      if (
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        (e.target as HTMLElement | null)?.isContentEditable
+      ) {
+        return;
+      }
+      if (e.code === "Space") {
+        e.preventDefault();
+        toggleStudioPlay();
+      } else if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        skipStudioSeconds(-5);
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        skipStudioSeconds(5);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [step, toggleStudioPlay, skipStudioSeconds]);
+
+  const parsedTranscriptTurns = useMemo(
+    () => parseTranscriptTurns(transcricaoInput),
+    [transcricaoInput]
+  );
+
+  const filteredTranscriptTurns = useMemo(() => {
+    const q = transcriptSearch.trim().toLowerCase();
+    if (!q) return parsedTranscriptTurns;
+    return parsedTranscriptTurns.filter(
+      (t) =>
+        t.text.toLowerCase().includes(q) ||
+        t.timestampLabel.toLowerCase().includes(q) ||
+        t.speakerLabel.toLowerCase().includes(q)
+    );
+  }, [parsedTranscriptTurns, transcriptSearch]);
+
+  const transcriptContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const activeTurnIndex = useMemo(() => {
+    if (studioCurrentTime <= 0 || parsedTranscriptTurns.length === 0) return -1;
+    for (let i = parsedTranscriptTurns.length - 1; i >= 0; i--) {
+      if (studioCurrentTime >= parsedTranscriptTurns[i].startSeconds) {
+        return parsedTranscriptTurns[i].index;
+      }
+    }
+    return -1;
+  }, [parsedTranscriptTurns, studioCurrentTime]);
+
+  // Auto-scroll suave da conversa conforme o áudio flui
+  useEffect(() => {
+    if (
+      activeTurnIndex < 0 ||
+      !transcriptContainerRef.current ||
+      transcriptSearch.trim()
+    ) {
+      return;
+    }
+    const container = transcriptContainerRef.current;
+    const activeEl = container.querySelector<HTMLElement>(
+      `[data-turn-index="${activeTurnIndex}"]`
+    );
+    if (!activeEl) return;
+    const targetTop =
+      activeEl.offsetTop -
+      container.clientHeight * 0.35 +
+      activeEl.clientHeight * 0.5;
+    container.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: "smooth",
+    });
+  }, [activeTurnIndex, transcriptSearch]);
+
+  const formatMmSs = (secs: number) => {
+    const safe = Math.max(0, Math.floor(secs || 0));
+    const mm = String(Math.floor(safe / 60)).padStart(2, "0");
+    const ss = String(safe % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+  };
 
   const { data: analyst, isLoading: isAnalystLoading } = useQuery({
     queryKey: ["analyst-profile", analystId],
@@ -1019,93 +1375,124 @@ function AnalystEvaluationFlowInner() {
 
   return (
     <AppShell>
-      <div className="space-y-4 pb-16">
-        {/* Top Header Compacto + Seletor Dinâmico de Setor + Stepper */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-zinc-800/80">
-          <div className="flex flex-wrap items-center gap-3 min-w-0">
+      <div
+        className={
+          step === 3
+            ? "h-full flex flex-col overflow-hidden bg-[#0b0b0d]"
+            : "h-full overflow-y-auto p-4 sm:p-6 space-y-5 pb-12"
+        }
+      >
+        {/* Barra Superior Minimalista de 1 Linha (Estilo ElevenLabs Studio Header) */}
+        <header
+          className={
+            step === 3
+              ? "h-12 px-5 border-b border-zinc-800/70 bg-[#0b0b0d] flex items-center justify-between gap-4 shrink-0"
+              : "flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-zinc-800/80 shrink-0"
+          }
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
             <Link
               href="/analysts"
-              className="p-2 rounded-lg border border-zinc-800 bg-[#0b0b0d] text-zinc-400 hover:text-zinc-100 transition-colors shrink-0"
+              aria-label="Voltar para Analistas"
+              className="h-7 w-7 rounded-md border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-100 flex items-center justify-center transition-colors shrink-0 focus-visible:ring-1 focus-visible:ring-zinc-400"
               title="Voltar para Analistas"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
             </Link>
 
-            <div className="flex flex-wrap items-center gap-2 min-w-0">
-              <h1 className="text-base sm:text-lg font-bold text-zinc-100 truncate">
-                {analyst?.name || "Carregando Analista..."}
-              </h1>
+            <h1 className="text-sm font-semibold text-zinc-100 truncate">
+              {analyst?.name || "Carregando…"}
+            </h1>
 
-              {/* Badge Fixo do Setor do Analista (Alteração de setor permitida apenas na tela /analysts) */}
-              <span className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-zinc-800 bg-zinc-900 text-xs font-mono text-zinc-300">
-                <UserCheck className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                <span>Setor: {analystSector}</span>
-              </span>
+            <span className="px-2 py-0.5 rounded-full bg-zinc-900 border border-zinc-800/80 text-[10px] font-mono uppercase tracking-wider text-zinc-400 shrink-0">
+              {analystSector}
+            </span>
 
-              {/* Seletor de Formulário de Avaliação */}
-              <div className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-zinc-700 bg-[#121215]">
-                <FolderKanban className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                <span className="text-[11px] font-mono text-zinc-400">
-                  Selecione o formulário:
-                </span>
-                <select
-                  value={activeFormForCall?.id || ""}
-                  onChange={(e) => handleFormTemplateSelect(e.target.value)}
-                  disabled={isSwitchingForm || existingTemplates.length === 0}
-                  aria-label="Selecione o formulário de avaliação"
-                  className="bg-transparent text-xs font-semibold text-zinc-100 focus:outline-none cursor-pointer max-w-[240px] truncate"
-                >
-                  {existingTemplates.map((tpl) => (
-                    <option key={tpl.id} value={tpl.id} className="bg-[#0b0b0d]">
-                      {tpl.name} ({tpl.maxPossiblePoints} pts)
-                    </option>
-                  ))}
-                </select>
-                {isSwitchingForm && (
-                  <Loader2 className="h-3 w-3 animate-spin text-zinc-300" />
-                )}
-              </div>
+            <span className="text-zinc-700 hidden sm:inline" aria-hidden="true">
+              /
+            </span>
+
+            {/* Seletor de Formulário Minimalista Inline */}
+            <div className="hidden sm:inline-flex items-center gap-1.5 h-7 px-2 rounded-md border border-zinc-800/80 bg-zinc-900/40 hover:border-zinc-700 transition-colors">
+              <select
+                value={activeFormForCall?.id || ""}
+                onChange={(e) => handleFormTemplateSelect(e.target.value)}
+                disabled={isSwitchingForm || existingTemplates.length === 0}
+                aria-label="Selecione o formulário de avaliação"
+                className="bg-transparent text-xs text-zinc-300 focus:outline-none cursor-pointer max-w-[220px] truncate"
+              >
+                {existingTemplates.map((tpl) => (
+                  <option
+                    key={tpl.id}
+                    value={tpl.id}
+                    className="bg-[#0b0b0d] text-zinc-100"
+                  >
+                    {tpl.name} ({tpl.maxPossiblePoints} pts)
+                  </option>
+                ))}
+              </select>
+              {isSwitchingForm && (
+                <Loader2
+                  className="h-3 w-3 animate-spin text-zinc-400"
+                  aria-hidden="true"
+                />
+              )}
             </div>
           </div>
 
-          {/* Stepper Enxuto */}
-          <div className="w-full sm:w-auto flex items-center gap-1 bg-[#0b0b0d] p-1 rounded-xl border border-zinc-800 shrink-0">
-            {(
-              [
-                { num: 1, label: "1. Dados do Cliente" },
-                { num: 2, label: `2. Ligações (${recordings.length})` },
-                { num: 3, label: "3. Avaliar" },
-              ] as const
-            ).map((s) => {
-              const active = step === s.num;
-              const done = step > s.num;
-              return (
-                <button
-                  key={s.num}
-                  type="button"
-                  disabled={s.num > step}
-                  onClick={() => setStep(s.num)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${
-                    active
-                      ? "bg-zinc-100 text-zinc-950 font-semibold"
-                      : done
-                      ? "text-zinc-300 hover:bg-zinc-900"
-                      : "text-zinc-600 cursor-not-allowed"
-                  }`}
-                >
-                  {done && (
-                    <Check className="h-3 w-3 text-emerald-400 shrink-0" />
-                  )}
-                  <span>{s.label}</span>
-                </button>
-              );
-            })}
+          {/* Direita: Stepper Compacto + Placar + Botão Publicar (No Passo 3) */}
+          <div className="flex items-center gap-3 shrink-0">
+            <nav
+              aria-label="Etapas da avaliação"
+              className="hidden md:flex items-center gap-1 bg-zinc-900/60 p-0.5 rounded-lg border border-zinc-800/80"
+            >
+              {(
+                [
+                  { num: 1, label: "1. Cliente" },
+                  { num: 2, label: `2. Áudio (${recordings.length})` },
+                  { num: 3, label: "3. Avaliar" },
+                ] as const
+              ).map((s) => {
+                const active = step === s.num;
+                const done = step > s.num;
+                return (
+                  <button
+                    key={s.num}
+                    type="button"
+                    disabled={s.num > step}
+                    onClick={() => setStep(s.num)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                      active
+                        ? "bg-zinc-100 text-zinc-950 font-semibold"
+                        : done
+                        ? "text-zinc-300 hover:text-zinc-100"
+                        : "text-zinc-600 cursor-not-allowed"
+                    }`}
+                  >
+                    {done && (
+                      <Check
+                        className="h-3 w-3 text-emerald-400 shrink-0"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span>{s.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
           </div>
-        </div>
+        </header>
 
         {flowError && (
-          <div className="p-3 rounded-xl border border-red-900/80 bg-red-950/40 text-red-200 text-xs flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+          <div
+            role="alert"
+            aria-live="polite"
+            className="mx-5 mt-2 p-2.5 rounded-lg border border-red-900/80 bg-red-950/40 text-red-200 text-xs flex items-center gap-2 shrink-0"
+          >
+            <AlertCircle
+              className="h-4 w-4 shrink-0 text-red-400"
+              aria-hidden="true"
+            />
             <span>{flowError}</span>
           </div>
         )}
@@ -1725,412 +2112,445 @@ function AnalystEvaluationFlowInner() {
             )}
 
             {/* ====================================================================
-                STEP 3: FORMULÁRIO DE MONITORIA (PORTABILIDADE / SAC / RETENÇÃO)
+                STEP 3: WORKSTATION MINIMALISTA DE AVALIAÇÃO QA & ÁUDIO (ELEVENLABS STUDIO)
+                Viewport-Locked • Zero Caixas Pesadas • Listas Flat com Divisores Sutis
                ==================================================================== */}
             {step === 3 && selectedCall && activeFormForCall && (
               <motion.div
-                key="step-3"
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-5"
+                key="step-3-studio"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                className="flex-1 min-h-0 flex flex-col bg-[#0b0b0d] overflow-hidden"
               >
-                {/* Resumo Condicional dos Dados do Cliente na Auditoria */}
-                <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3">
-                  {isSacOrRetencao ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Ticket Zendesk
-                        </span>
-                        <span className="font-mono text-zinc-100 font-semibold block truncate">
-                          #{ticketInput.replace(/^#/, "")}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Data do Atendimento
-                        </span>
-                        <span className="font-mono text-zinc-100 font-medium block truncate">
-                          {dataAtendimentoInput}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Data da Monitoria
-                        </span>
-                        <span className="font-mono text-zinc-100 font-medium block truncate">
-                          {dataMonitoriaInput}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 text-xs">
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Telefone
-                        </span>
-                        <span className="font-mono text-zinc-100 font-medium block truncate">
-                          {extractCleanPhoneDigits(phoneInput) ||
-                            selectedCall.customerIdentifier}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Data da Venda
-                        </span>
-                        <span className="font-mono text-zinc-100 font-medium block truncate">
-                          {saleDateInput || "-"}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Nome
-                        </span>
-                        <span className="text-zinc-100 font-medium block truncate">
-                          {customerNameInput || "-"}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          CPF
-                        </span>
-                        <span className="font-mono text-zinc-100 font-medium block truncate">
-                          {customerCpfInput || "-"}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Plano Contratado
-                        </span>
-                        <span className="text-zinc-100 font-medium block truncate">
-                          {contractedPlanInput || "-"}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Proposta
-                        </span>
-                        <span className="font-mono text-zinc-100 font-medium block truncate">
-                          {proposalInput || "-"}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Forma de Pagamento
-                        </span>
-                        <span className="text-zinc-100 font-medium block truncate">
-                          {paymentMethodInput || "-"}
-                        </span>
-                      </div>
-                      <div className="p-2.5 rounded-lg bg-[#121215] border border-zinc-800/80">
-                        <span className="text-[10px] font-mono text-zinc-500 block">
-                          Vencimento
-                        </span>
-                        <span className="text-zinc-100 font-medium block truncate">
-                          {dueDateInput || "-"}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Barra Unificada: Seletor de Formulário + Players de Todas as Ligações Anexadas */}
-                <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3.5">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <FolderKanban className="h-4 w-4 text-zinc-400 shrink-0" />
-                      <select
-                        value={activeFormForCall.id}
-                        onChange={(e) => {
-                          const tpl = existingTemplates.find(
-                            (t) => t.id === e.target.value
-                          );
-                          if (tpl) applyTemplateSelection(tpl);
-                        }}
-                        aria-label="Selecionar formulário"
-                        className="h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-medium text-zinc-100 focus:outline-none focus:border-zinc-600 max-w-md w-full truncate"
-                      >
-                        {existingTemplates.map((tpl) => (
-                          <option key={tpl.id} value={tpl.id}>
-                            {tpl.name} ({tpl.sector || "Geral"} •{" "}
-                            {tpl.maxPossiblePoints} pts)
-                          </option>
-                        ))}
-                      </select>
-
-                      <Link
-                        href="/forms"
-                        className="h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] hover:bg-zinc-900 text-xs text-zinc-300 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-                      >
-                        <span>Editar Formulários</span>
-                      </Link>
-                    </div>
-
-                    <div className="flex items-center gap-2.5 shrink-0">
-                      <span className="text-xs font-mono text-zinc-400">
-                        Nota_Final: {liveScore.obtainedPoints}/
-                        {liveScore.maxPossiblePoints} pts
-                      </span>
-                      <span
-                        className={`px-2.5 py-1 rounded-md text-xs font-mono font-bold border ${
-                          liveScore.status === "APROVADO"
-                            ? "bg-emerald-950/50 text-emerald-300 border-emerald-800/80"
-                            : liveScore.status === "ZERADO_ERRO_GRAVE"
-                            ? "bg-red-950/70 text-red-200 border-red-800"
-                            : "bg-zinc-900 text-zinc-200 border-zinc-800"
-                        }`}
-                      >
-                        {liveScore.finalPercentage.toFixed(0)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Renderiza um Player para cada ligação anexada na avaliação (Funcionalidade de escutar áudio preservada) */}
-                  <div className="space-y-2.5">
-                    {recordings.map((slot, idx) => (
-                      <CallAudioPlayer
-                        key={slot.id}
-                        audioUrl={slot.previewUrl || selectedCall.audioUrl}
-                        externalCallId={`Ligação #${idx + 1} • ${
-                          slot.file?.name || selectedCall.externalCallId
-                        }`}
-                        durationSeconds={
-                          slot.durationSeconds || selectedCall.durationSeconds
-                        }
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Campo de Transcrição da Ligação (Recebida do Webhook n8n / Editável) */}
-                <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono uppercase tracking-wider font-semibold text-zinc-200">
-                        Transcrição da Ligação (Transcricao)
-                      </span>
-                      {aiSyncStatus === "PROCESSING" && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-zinc-900 border border-zinc-700 text-[11px] font-mono text-zinc-300">
-                          <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
-                          <span>
-                            Processando transcrição e respostas via webhook...
-                          </span>
-                        </span>
-                      )}
-                      {aiSyncStatus === "COMPLETED" && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
-                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                          <span>
-                            Transcrição e respostas preenchidas automaticamente
-                          </span>
-                        </span>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (!selectedCall?.id) return;
-                        setAiWebhookError(null);
-                        try {
-                          const latest = await callsApi.getById(selectedCall.id);
-                          const meta = latest.metadata || {};
-                          if (
-                            typeof meta.transcricao === "string" &&
-                            meta.transcricao.trim().length > 200
-                          ) {
-                            const payloadWithTranscricao =
-                              typeof meta.aiEvaluationData === "object" &&
-                              meta.aiEvaluationData !== null
-                                ? {
-                                    ...(meta.aiEvaluationData as Record<
-                                      string,
-                                      unknown
-                                    >),
-                                    transcricao: meta.transcricao,
-                                  }
-                                : { transcricao: meta.transcricao };
-                            applyAiEvaluationPayload(
-                              payloadWithTranscricao,
-                              activeFormForCall
-                            );
-                            return;
-                          }
-                        } catch {
-                          // Prossegue para reenvio do webhook
-                        }
-                        setAiSyncStatus("PROCESSING");
-                        await callsApi
-                          .retryAudioWebhook(selectedCall.id)
+                {/* Elemento de Áudio HTML5 Sincronizado */}
+                <audio
+                  ref={studioAudioRef}
+                  src={activeStudioAudioUrl}
+                  preload="metadata"
+                  onLoadedMetadata={(e) => {
+                    const el = e.currentTarget;
+                    if (el.duration && isFinite(el.duration) && el.duration > 0) {
+                      const realSecs = Math.round(el.duration);
+                      setStudioDuration(realSecs);
+                      if (
+                        selectedCall.externalCallId &&
+                        Math.abs(realSecs - (selectedCall.durationSeconds || 0)) >
+                          2
+                      ) {
+                        callsApi
+                          .syncDetectedDuration(
+                            selectedCall.externalCallId,
+                            realSecs
+                          )
                           .catch(() => {});
-                      }}
-                      className="h-7 px-2.5 rounded-md border border-zinc-800 bg-[#121215] hover:bg-zinc-800 text-[11px] font-mono text-zinc-300 inline-flex items-center gap-1.5 transition-colors"
-                    >
-                      <RefreshCw className="h-3 w-3" />
-                      <span>Reenviar / Sincronizar Webhook</span>
-                    </button>
-                  </div>
+                      }
+                    }
+                  }}
+                  onTimeUpdate={(e) => {
+                    setStudioCurrentTime(e.currentTarget.currentTime);
+                  }}
+                  onPlay={() => setStudioPlaying(true)}
+                  onPause={() => setStudioPlaying(false)}
+                  onEnded={() => setStudioPlaying(false)}
+                />
 
-                  {aiWebhookError && (
-                    <div className="p-3 rounded-lg border border-amber-800/70 bg-amber-950/35 text-xs text-amber-200 flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-                      <span>{aiWebhookError}</span>
-                    </div>
-                  )}
-
-                  <textarea
-                    rows={10}
-                    value={transcricaoInput}
-                    onChange={(e) => setTranscricaoInput(e.target.value)}
-                    placeholder="A transcrição gerada pelo webhook aparecerá automaticamente aqui (ex: [00:02] Atendente: Alô, boa tarde...). Você também pode colar ou editar o texto."
-                    className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs font-mono leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600"
-                  />
-                </div>
-
-                {/* Grid Principal: Critérios à Esquerda + Resumo Nota_Final à Direita */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                  <div className="lg:col-span-8 space-y-5">
-                    <div className="space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-mono uppercase tracking-wider text-zinc-400">
-                          Critérios ({standardItems.length}) •{" "}
-                          {activeFormForCall.name}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const allChecked = standardItems.every(
-                              (i) => checkedMap[i.id]
-                            );
-                            const next = { ...checkedMap };
-                            standardItems.forEach((i) => {
-                              next[i.id] = !allChecked;
-                            });
-                            setCheckedMap(next);
-                          }}
-                          className="text-[11px] font-mono text-zinc-400 hover:text-zinc-100"
-                        >
-                          Alternar todos
-                        </button>
+                {/* CORPO SPLIT-PANE (ESQUERDA: DIÁLOGO EDITORIAL | DIREITA: ABAS FLAT) */}
+                <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+                  {/* ================================================================
+                      COLUNA ESQUERDA (6 COLUNAS): TRANSCRIÇÃO EDITORIAL (ESTILO ELEVENLABS)
+                     ================================================================ */}
+                  <div className="lg:col-span-6 h-full min-h-0 flex flex-col border-b lg:border-b-0 lg:border-r border-zinc-800/70 bg-[#0b0b0d]">
+                    {/* Barra Única Limpa da Transcrição (Apenas Busca + Botão Sincronizar) */}
+                    <div className="h-10 px-5 border-b border-zinc-800/70 flex items-center justify-between gap-3 shrink-0">
+                      <div className="relative flex-1 max-w-xs">
+                        <Search
+                          className="h-3 w-3 text-zinc-500 absolute left-2.5 top-2"
+                          aria-hidden="true"
+                        />
+                        <input
+                          type="search"
+                          name="transcriptSearch"
+                          autoComplete="off"
+                          aria-label="Filtrar transcrição"
+                          value={transcriptSearch}
+                          onChange={(e) => setTranscriptSearch(e.target.value)}
+                          placeholder="Buscar na conversa…"
+                          className="w-full h-7 pl-7 pr-2.5 rounded-md border border-zinc-800/80 bg-zinc-900/50 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-600 transition-colors"
+                        />
                       </div>
 
-                      <div className="space-y-2">
-                        {standardItems.map((item) => {
-                          const isChecked = !!checkedMap[item.id];
-                          const noteOpen = expandedNoteItemId === item.id;
-
-                          return (
-                            <div
-                              key={item.id}
-                              className={`rounded-xl border transition-all p-3.5 flex flex-col gap-2 ${
-                                isChecked
-                                  ? "border-zinc-600 bg-[#141418]"
-                                  : "border-amber-900/50 bg-[#0b0b0d] hover:border-zinc-700"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <label className="flex items-center gap-3 cursor-pointer flex-1 select-none min-w-0">
-                                  <input
-                                    type="checkbox"
-                                    checked={isChecked}
-                                    onChange={(e) =>
-                                      setCheckedMap((prev) => ({
-                                        ...prev,
-                                        [item.id]: e.target.checked,
-                                      }))
+                      <button
+                        type="button"
+                        aria-label="Sincronizar transcrição do webhook"
+                        onClick={async () => {
+                          if (!selectedCall?.id) return;
+                          setAiWebhookError(null);
+                          try {
+                            const latest = await callsApi.getById(
+                              selectedCall.id
+                            );
+                            const meta = latest.metadata || {};
+                            if (
+                              typeof meta.transcricao === "string" &&
+                              meta.transcricao.trim().length > 200
+                            ) {
+                              const payloadWithTranscricao =
+                                typeof meta.aiEvaluationData === "object" &&
+                                meta.aiEvaluationData !== null
+                                  ? {
+                                      ...(meta.aiEvaluationData as Record<
+                                        string,
+                                        unknown
+                                      >),
+                                      transcricao: meta.transcricao,
                                     }
-                                    className="h-4 w-4 rounded border-zinc-600 text-zinc-100 focus:ring-0 cursor-pointer shrink-0"
-                                  />
-                                  <div className="min-w-0">
-                                    <span className="text-[10px] font-mono text-zinc-500 block">
-                                      {item.category}
-                                    </span>
-                                    <span className="text-xs font-medium text-zinc-100 leading-snug block">
-                                      {item.label}
-                                    </span>
-                                  </div>
-                                </label>
+                                  : { transcricao: meta.transcricao };
+                              applyAiEvaluationPayload(
+                                payloadWithTranscricao,
+                                activeFormForCall
+                              );
+                              return;
+                            }
+                          } catch {
+                            // Prossegue para reenvio
+                          }
+                          setAiSyncStatus("PROCESSING");
+                          await callsApi
+                            .retryAudioWebhook(selectedCall.id)
+                            .catch(() => {});
+                        }}
+                        className="h-7 px-2.5 rounded-md border border-zinc-800/80 bg-zinc-900/50 hover:bg-zinc-800 text-xs font-mono text-zinc-300 inline-flex items-center gap-1.5 transition-colors shrink-0"
+                      >
+                        <RefreshCw
+                          className={`h-3 w-3 ${
+                            aiSyncStatus === "PROCESSING" ? "animate-spin" : ""
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span>Sincronizar</span>
+                      </button>
+                    </div>
 
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <span
-                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold whitespace-nowrap ${
-                                      isChecked
-                                        ? "bg-zinc-100 text-zinc-950"
-                                        : "bg-red-950/60 text-red-300 border border-red-900/60"
-                                    }`}
-                                  >
-                                    {isChecked
-                                      ? `${item.points || 1} pts`
-                                      : `0 / ${item.points || 1} pts`}
-                                  </span>
+                    {aiWebhookError && (
+                      <div
+                        role="alert"
+                        className="mx-5 mt-3 p-2.5 rounded-lg border border-amber-800/60 bg-amber-950/30 text-xs text-amber-200 flex items-start gap-2 shrink-0"
+                      >
+                        <AlertTriangle
+                          className="h-4 w-4 text-amber-400 shrink-0 mt-0.5"
+                          aria-hidden="true"
+                        />
+                        <span>{aiWebhookError}</span>
+                      </div>
+                    )}
+
+                    {/* Corpo Rolável da Conversa (Auto-Scroll sincronizado com o áudio) */}
+                    <div
+                      ref={transcriptContainerRef}
+                      className="flex-1 min-h-0 overflow-y-auto px-6 py-5 relative"
+                    >
+                      {studioTranscriptMode === "raw" ? (
+                        <textarea
+                          name="rawTranscript"
+                          aria-label="Texto bruto da transcrição"
+                          value={transcricaoInput}
+                          onChange={(e) => setTranscricaoInput(e.target.value)}
+                          placeholder="Cole ou edite a transcrição aqui (ex: [00:02] Atendente: Alô, boa tarde…)…"
+                          className="w-full h-full min-h-[360px] p-4 rounded-lg border border-zinc-800/80 bg-zinc-900/30 text-xs font-mono leading-relaxed text-zinc-200 focus:outline-none focus:border-zinc-600 resize-none"
+                        />
+                      ) : filteredTranscriptTurns.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-center py-16 px-4 space-y-2.5">
+                          {aiSyncStatus === "PROCESSING" ? (
+                            <>
+                              <Loader2
+                                className="h-5 w-5 animate-spin text-zinc-500"
+                                aria-hidden="true"
+                              />
+                              <p className="text-xs font-medium text-zinc-300">
+                                Transcrevendo gravação e avaliando critérios…
+                              </p>
+                              <p className="text-xs text-zinc-500 max-w-xs leading-relaxed">
+                                Ouça o áudio abaixo ou confira os critérios ao
+                                lado enquanto a análise finaliza.
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-xs text-zinc-400">
+                                {transcriptSearch
+                                  ? "Nenhum trecho encontrado para esta busca."
+                                  : "Nenhuma transcrição disponível."}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => setStudioTranscriptMode("raw")}
+                                className="px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800 text-xs text-zinc-300 transition-colors"
+                              >
+                                Inserir transcrição manualmente
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-5">
+                          {filteredTranscriptTurns.map((turn) => {
+                            const isCurrentTurn =
+                              studioCurrentTime >= turn.startSeconds &&
+                              studioCurrentTime < turn.endSeconds;
+                            const isAgent = turn.speaker === "ATENDENTE";
+
+                            return (
+                              <div
+                                key={turn.index}
+                                data-turn-index={turn.index}
+                                className="group flex items-start gap-3"
+                              >
+                                {/* Avatar Minimalista */}
+                                <span
+                                  className={`mt-0.5 h-6 w-6 rounded-full text-[10px] font-mono font-semibold flex items-center justify-center shrink-0 ${
+                                    isCurrentTurn
+                                      ? "bg-zinc-100 text-zinc-950 ring-2 ring-zinc-400/40"
+                                      : isAgent
+                                      ? "bg-zinc-800 text-zinc-200"
+                                      : "bg-zinc-900 text-zinc-400 border border-zinc-800"
+                                  }`}
+                                >
+                                  {isAgent ? "A" : "U"}
+                                </span>
+
+                                <div className="flex-1 min-w-0 space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-medium text-zinc-300">
+                                      {turn.speakerLabel}
+                                    </span>
+                                    {turn.tone && (
+                                      <span className="text-[11px] font-mono text-zinc-500 truncate">
+                                        · {turn.tone}
+                                      </span>
+                                    )}
+                                  </div>
+
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      setExpandedNoteItemId(
-                                        noteOpen ? null : item.id
-                                      )
+                                      seekStudioAudioTo(turn.startSeconds, true)
                                     }
-                                    className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300"
+                                    className={`w-full text-left rounded-lg transition-colors ${
+                                      isAgent
+                                        ? isCurrentTurn
+                                          ? "bg-zinc-800/80 border border-zinc-600 px-3.5 py-2.5"
+                                          : "bg-zinc-900/45 border border-zinc-800/60 hover:border-zinc-700/80 px-3.5 py-2.5"
+                                        : isCurrentTurn
+                                        ? "bg-zinc-900/70 px-3 py-1.5 rounded-lg"
+                                        : "hover:bg-zinc-900/30 px-1 py-0.5"
+                                    }`}
                                   >
-                                    Obs
+                                    <p className="text-[13px] leading-[1.6] text-zinc-200">
+                                      {turn.text}
+                                    </p>
                                   </button>
+
+                                  {/* Linha de Metadados Inferior (Idêntico ao ElevenLabs: "0:05 | + Marcar") */}
+                                  <div className="flex items-center gap-2.5 pt-0.5 text-[11px] font-mono text-zinc-500">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        seekStudioAudioTo(
+                                          turn.startSeconds,
+                                          true
+                                        )
+                                      }
+                                      className={`tabular-nums hover:text-zinc-200 transition-colors ${
+                                        isCurrentTurn
+                                          ? "text-zinc-100 font-semibold"
+                                          : ""
+                                      }`}
+                                    >
+                                      {turn.timestampLabel}
+                                    </button>
+
+                                    <span
+                                      className="text-zinc-800"
+                                      aria-hidden="true"
+                                    >
+                                      |
+                                    </span>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const snippet = `• [${turn.timestampLabel}] ${turn.speakerLabel}: “${turn.text.slice(
+                                          0,
+                                          90
+                                        )}”`;
+                                        setGeneralFeedback((prev) =>
+                                          prev ? `${prev}\n${snippet}` : snippet
+                                        );
+                                        setStudioRightTab("observations");
+                                      }}
+                                      className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-zinc-400 hover:text-zinc-100 transition-opacity"
+                                    >
+                                      + Marcar em observações
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
-                              {(noteOpen || observationMap[item.id]) && (
-                                <input
-                                  type="text"
-                                  value={observationMap[item.id] || ""}
-                                  onChange={(e) =>
-                                    setObservationMap((prev) => ({
-                                      ...prev,
-                                      [item.id]: e.target.value,
-                                    }))
-                                  }
-                                  placeholder="Observação específica deste critério..."
-                                  className="w-full h-8 px-2.5 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-200 focus:outline-none focus:border-zinc-600"
-                                />
-                              )}
-                            </div>
-                          );
-                        })}
+                  {/* ================================================================
+                      COLUNA DIREITA (6 COLUNAS): ABAS FLAT COM UNDERLINE (ESTILO ELEVENLABS)
+                     ================================================================ */}
+                  <div className="lg:col-span-6 h-full min-h-0 flex flex-col bg-[#0b0b0d]">
+                    {/* Abas com Underline Limpo (Sem Caixas Pesadas) */}
+                    <div className="h-10 px-6 border-b border-zinc-800/70 flex items-center justify-between gap-4 shrink-0">
+                      <div
+                        role="tablist"
+                        aria-label="Seções da avaliação"
+                        className="flex items-center gap-6 h-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                      >
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={studioRightTab === "criteria"}
+                          onClick={() => setStudioRightTab("criteria")}
+                          className={`h-full border-b-2 text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                            studioRightTab === "criteria"
+                              ? "border-zinc-100 text-zinc-100"
+                              : "border-transparent text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          <span>Critérios</span>
+                          <span className="text-[11px] font-mono text-zinc-400 tabular-nums">
+                            {
+                              standardItems.filter((i) => checkedMap[i.id])
+                                .length
+                            }
+                            /{standardItems.length}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={studioRightTab === "observations"}
+                          onClick={() => setStudioRightTab("observations")}
+                          className={`h-full border-b-2 text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                            studioRightTab === "observations"
+                              ? "border-zinc-100 text-zinc-100"
+                              : "border-transparent text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          <span>Observações & Falta Grave</span>
+                          {liveScore.fatalTriggered && (
+                            <span
+                              className="h-1.5 w-1.5 rounded-full bg-red-500"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={studioRightTab === "customer"}
+                          onClick={() => setStudioRightTab("customer")}
+                          className={`h-full border-b-2 text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                            studioRightTab === "customer"
+                              ? "border-zinc-100 text-zinc-100"
+                              : "border-transparent text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          <span>Dados do Cliente</span>
+                        </button>
                       </div>
+
+                      <span className="hidden sm:inline text-[11px] font-mono text-zinc-500 shrink-0 tabular-nums">
+                        Meta:{" "}
+                        {Number(
+                          activeFormForCall.passingScorePercentage
+                        ).toFixed(0)}
+                        %
+                      </span>
                     </div>
 
-                    {/* Falta_Grave / falta_grave & Motivo_falta_grave */}
-                    {fatalItems.length > 0 && (
-                      <div className="space-y-2.5 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-mono uppercase tracking-wider text-red-400/90 flex items-center gap-1.5">
-                            <ShieldAlert className="h-3.5 w-3.5" />
-                            <span>Falta_Grave (Zera Nota_Final = 0)</span>
-                          </span>
-                          <span className="text-[11px] font-mono text-zinc-400">
-                            falta_grave:{" "}
-                            <strong
-                              className={
-                                liveScore.fatalTriggered
-                                  ? "text-red-400"
-                                  : "text-emerald-400"
-                              }
-                            >
-                              {liveScore.fatalTriggered ? "true" : "false"}
-                            </strong>
-                          </span>
-                        </div>
+                    {/* CONTEÚDO ROLÁVEL DA ABA ATIVA */}
+                    <div className="flex-1 min-h-0 overflow-y-auto">
+                      {/* ABA 1: CRITÉRIOS EM LISTA FLAT (DIVIDE-Y • ALTA DENSIDADE E CLAREZA) */}
+                      {studioRightTab === "criteria" && (
+                        <div>
+                          {/* Sub-barra de Filtro Enxuta */}
+                          <div className="sticky top-0 z-10 px-6 py-2.5 border-b border-zinc-800/60 bg-[#0b0b0d]/95 backdrop-blur flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-3 text-xs">
+                              <button
+                                type="button"
+                                onClick={() => setCriteriaFilter("ALL")}
+                                className={`font-medium transition-colors ${
+                                  criteriaFilter === "ALL"
+                                    ? "text-zinc-100"
+                                    : "text-zinc-500 hover:text-zinc-300"
+                                }`}
+                              >
+                                Todos ({standardItems.length})
+                              </button>
+                              <span
+                                className="text-zinc-800"
+                                aria-hidden="true"
+                              >
+                                ·
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setCriteriaFilter("UNCHECKED")}
+                                className={`font-medium transition-colors ${
+                                  criteriaFilter === "UNCHECKED"
+                                    ? "text-zinc-100"
+                                    : "text-zinc-500 hover:text-zinc-300"
+                                }`}
+                              >
+                                Desmarcados (
+                                {
+                                  standardItems.filter((i) => !checkedMap[i.id])
+                                    .length
+                                }
+                                )
+                              </button>
+                            </div>
 
-                        <div className="space-y-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const allChecked = standardItems.every(
+                                  (i) => checkedMap[i.id]
+                                );
+                                const next = { ...checkedMap };
+                                standardItems.forEach((i) => {
+                                  next[i.id] = !allChecked;
+                                });
+                                setCheckedMap(next);
+                              }}
+                              className="text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors"
+                            >
+                              Alternar todos
+                            </button>
+                          </div>
+
+                          {/* Linha de Falta Grave (Compacta e Flat) */}
                           {fatalItems.map((item) => {
                             const isViolated = !!checkedMap[item.id];
                             return (
                               <div
                                 key={item.id}
-                                className={`rounded-xl border transition-all p-3.5 ${
+                                className={`px-6 py-3 border-b transition-colors ${
                                   isViolated
-                                    ? "border-red-600 bg-red-950/30"
-                                    : "border-zinc-800/90 bg-[#121215] hover:border-red-900/60"
+                                    ? "border-red-900/50 bg-red-950/20"
+                                    : "border-zinc-800/60 bg-zinc-900/20"
                                 }`}
                               >
                                 <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
@@ -2155,205 +2575,683 @@ function AnalystEvaluationFlowInner() {
                                       }}
                                       className="h-4 w-4 rounded border-zinc-600 text-red-600 focus:ring-0 cursor-pointer shrink-0"
                                     />
-                                    <span className="text-xs font-medium text-zinc-100 leading-snug">
+                                    <span className="text-xs font-medium text-zinc-200 truncate">
                                       {item.label}
                                     </span>
                                   </div>
                                   <span
-                                    className={`px-2 py-0.5 rounded text-[10px] font-mono shrink-0 ${
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider shrink-0 ${
                                       isViolated
-                                        ? "bg-red-600 text-white font-bold"
-                                        : "bg-zinc-900 text-zinc-500 border border-zinc-800"
+                                        ? "bg-red-950 text-red-300 border border-red-800/80"
+                                        : "bg-zinc-900 text-zinc-500"
                                     }`}
                                   >
-                                    {isViolated ? "FALTA GRAVE" : "Inativo"}
+                                    {isViolated
+                                      ? "Falta Grave Ativa"
+                                      : "Falta Grave"}
                                   </span>
                                 </label>
                               </div>
                             );
                           })}
-                        </div>
 
-                        <div className="pt-1">
-                          <label className="block text-xs font-mono text-zinc-300 mb-1">
-                            Motivo_falta_grave
-                          </label>
-                          <textarea
-                            rows={4}
-                            value={motivoFaltaGrave}
-                            onChange={(e) =>
-                              setMotivoFaltaGrave(e.target.value)
-                            }
-                            placeholder="Descreva o motivo caso haja falta grave..."
-                            className="w-full p-3 rounded-xl border border-zinc-800 bg-[#121215] text-xs font-mono leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
-                          />
-                        </div>
-                      </div>
-                    )}
+                          {/* Lista Flat de Critérios (Sem Caixas Individuais • Separados por Linha Sutil) */}
+                          <div className="divide-y divide-zinc-800/50">
+                            {standardItems
+                              .filter((item) =>
+                                criteriaFilter === "UNCHECKED"
+                                  ? !checkedMap[item.id]
+                                  : true
+                              )
+                              .map((item) => {
+                                const isChecked = !!checkedMap[item.id];
+                                const noteOpen = expandedNoteItemId === item.id;
 
-                    {/* Observacoes / Breve_resumo_do_atendimento + Pontos_fortes + Melhorias */}
-                    <div className="space-y-3 p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d]">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <label className="block text-xs font-mono uppercase tracking-wider text-zinc-300">
-                          Observacoes / Breve_resumo_do_atendimento
-                        </label>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {[
-                            "Possui vício de linguagem (né / tá / aí).",
-                            "Não menciona os canais digitais da administradora.",
-                            "Não solicita confirmação de CPF/e-mail/telefone secundário.",
-                          ].map((snippet) => (
-                            <button
-                              key={snippet}
-                              type="button"
-                              onClick={() => {
-                                const audioEl = document.querySelector("audio");
-                                const curSecs =
-                                  audioEl &&
-                                  Number.isFinite(audioEl.currentTime) &&
-                                  audioEl.currentTime > 0
-                                    ? Math.floor(audioEl.currentTime)
-                                    : 0;
-                                const mm = String(
-                                  Math.floor(curSecs / 60)
-                                ).padStart(2, "0");
-                                const ss = String(curSecs % 60).padStart(
-                                  2,
-                                  "0"
+                                return (
+                                  <div
+                                    key={item.id}
+                                    className="px-6 py-3 hover:bg-zinc-900/30 transition-colors"
+                                  >
+                                    <div className="flex items-start justify-between gap-4">
+                                      <label className="flex items-start gap-3 cursor-pointer flex-1 select-none min-w-0">
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={(e) =>
+                                            setCheckedMap((prev) => ({
+                                              ...prev,
+                                              [item.id]: e.target.checked,
+                                            }))
+                                          }
+                                          className="mt-0.5 h-4 w-4 rounded border-zinc-700 text-zinc-100 focus:ring-0 cursor-pointer shrink-0"
+                                        />
+                                        <div className="min-w-0">
+                                          <p
+                                            className={`text-[13px] leading-snug ${
+                                              isChecked
+                                                ? "text-zinc-200"
+                                                : "text-amber-200/90"
+                                            }`}
+                                          >
+                                            {item.label}
+                                          </p>
+                                          <span className="text-[11px] font-mono text-zinc-500 block mt-0.5">
+                                            {item.category}
+                                          </span>
+                                        </div>
+                                      </label>
+
+                                      <div className="flex items-center gap-2 shrink-0 pt-0.5">
+                                        <span
+                                          className={`text-[11px] font-mono tabular-nums ${
+                                            isChecked
+                                              ? "text-zinc-300"
+                                              : "text-red-400"
+                                          }`}
+                                        >
+                                          {isChecked
+                                            ? `${item.points || 1} pts`
+                                            : `0/${item.points || 1}`}
+                                        </span>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (
+                                              !noteOpen &&
+                                              !observationMap[item.id]
+                                            ) {
+                                              const stamp = `[${formatMmSs(
+                                                studioCurrentTime
+                                              )}] `;
+                                              setObservationMap((prev) => ({
+                                                ...prev,
+                                                [item.id]: stamp,
+                                              }));
+                                            }
+                                            setExpandedNoteItemId(
+                                              noteOpen ? null : item.id
+                                            );
+                                          }}
+                                          className="text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition-colors"
+                                        >
+                                          Obs
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {(noteOpen || observationMap[item.id]) && (
+                                      <div className="pl-7 pt-2">
+                                        <input
+                                          type="text"
+                                          aria-label={`Observação para ${item.label}`}
+                                          value={observationMap[item.id] || ""}
+                                          onChange={(e) =>
+                                            setObservationMap((prev) => ({
+                                              ...prev,
+                                              [item.id]: e.target.value,
+                                            }))
+                                          }
+                                          placeholder="Observação deste critério com [MM:SS]…"
+                                          className="w-full h-8 px-3 rounded-md border border-zinc-800 bg-zinc-900/50 text-xs font-mono text-zinc-200 focus:outline-none focus:border-zinc-600"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
                                 );
-                                const lineWithTime = `[${mm}:${ss}] ${snippet}`;
-                                setGeneralFeedback((prev) =>
-                                  prev
-                                    ? `${prev}\n• ${lineWithTime}`
-                                    : `• ${lineWithTime}`
-                                );
-                              }}
-                              className="px-2 py-0.5 rounded border border-zinc-800 bg-[#121215] hover:border-zinc-600 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
-                            >
-                              <Clock className="h-2.5 w-2.5" />
-                              <span>{snippet.slice(0, 26)}...</span>
-                            </button>
-                          ))}
+                              })}
+                          </div>
                         </div>
-                      </div>
-                      <textarea
-                        rows={7}
-                        value={generalFeedback}
-                        onChange={(e) => setGeneralFeedback(e.target.value)}
-                        placeholder="Breve resumo do atendimento / Observações da monitoria..."
-                        className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
-                      />
+                      )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                        <div>
-                          <label className="block text-xs font-mono text-zinc-400 mb-1">
-                            Pontos_fortes (Opcional)
-                          </label>
-                          <input
-                            type="text"
-                            value={pontosFortes}
-                            onChange={(e) => setPontosFortes(e.target.value)}
-                            placeholder="Pontos fortes identificados..."
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                          />
+                      {/* ABA 2: OBSERVAÇÕES & FALTA GRAVE (LAYOUT EDITORIAL LIMPO) */}
+                      {studioRightTab === "observations" && (
+                        <div className="p-6 space-y-6">
+                          {fatalItems.length > 0 && (
+                            <div className="space-y-2 pb-5 border-b border-zinc-800/60">
+                              <div className="flex items-center justify-between">
+                                <label
+                                  htmlFor="motivo-falta-grave"
+                                  className="text-xs font-medium text-zinc-200"
+                                >
+                                  Motivo da Falta Grave
+                                </label>
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider ${
+                                    liveScore.fatalTriggered
+                                      ? "bg-red-950/60 text-red-300 border border-red-900/60"
+                                      : "bg-zinc-900 text-zinc-500"
+                                  }`}
+                                >
+                                  {liveScore.fatalTriggered
+                                    ? "Falta Grave Ativa (Nota 0)"
+                                    : "Sem Falta Grave"}
+                                </span>
+                              </div>
+                              <textarea
+                                id="motivo-falta-grave"
+                                rows={3}
+                                value={motivoFaltaGrave}
+                                onChange={(e) =>
+                                  setMotivoFaltaGrave(e.target.value)
+                                }
+                                placeholder="Descreva o motivo com o minuto e segundo [MM:SS] caso haja falta grave…"
+                                className="w-full p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/35 text-xs font-mono leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
+                              />
+                            </div>
+                          )}
+
+                          <div className="space-y-2.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <label
+                                htmlFor="observacoes-monitoria"
+                                className="text-xs font-medium text-zinc-200"
+                              >
+                                Observações & Minutagem do Atendimento
+                              </label>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {[
+                                  "Vício de linguagem (né / tá / aí).",
+                                  "Não mencionou canais digitais.",
+                                  "Não confirmou CPF/e-mail.",
+                                ].map((snippet) => (
+                                  <button
+                                    key={snippet}
+                                    type="button"
+                                    onClick={() => {
+                                      const stamp = formatMmSs(
+                                        studioCurrentTime
+                                      );
+                                      const lineWithTime = `[${stamp}] ${snippet}`;
+                                      setGeneralFeedback((prev) =>
+                                        prev
+                                          ? `${prev}\n• ${lineWithTime}`
+                                          : `• ${lineWithTime}`
+                                      );
+                                    }}
+                                    className="px-2 py-0.5 rounded-md border border-zinc-800/80 bg-zinc-900/50 hover:bg-zinc-800 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
+                                  >
+                                    + [{formatMmSs(studioCurrentTime)}]{" "}
+                                    {snippet.slice(0, 18)}…
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <textarea
+                              id="observacoes-monitoria"
+                              rows={8}
+                              value={generalFeedback}
+                              onChange={(e) =>
+                                setGeneralFeedback(e.target.value)
+                              }
+                              placeholder="Resumo do atendimento e observações com minuto e segundo [MM:SS]…"
+                              className="w-full p-3.5 rounded-lg border border-zinc-800/80 bg-zinc-900/35 text-xs font-mono leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-zinc-800/60">
+                            <div>
+                              <label
+                                htmlFor="pontos-fortes"
+                                className="block text-xs text-zinc-400 mb-1.5"
+                              >
+                                Pontos Fortes (Opcional)
+                              </label>
+                              <textarea
+                                id="pontos-fortes"
+                                rows={2}
+                                value={pontosFortes}
+                                onChange={(e) =>
+                                  setPontosFortes(e.target.value)
+                                }
+                                placeholder="Pontos fortes identificados…"
+                                className="w-full p-2.5 rounded-lg border border-zinc-800/80 bg-zinc-900/35 text-xs text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
+                              />
+                            </div>
+                            <div>
+                              <label
+                                htmlFor="oportunidades-melhoria"
+                                className="block text-xs text-zinc-400 mb-1.5"
+                              >
+                                Oportunidades de Melhoria (Opcional)
+                              </label>
+                              <textarea
+                                id="oportunidades-melhoria"
+                                rows={2}
+                                value={melhorias}
+                                onChange={(e) => setMelhorias(e.target.value)}
+                                placeholder="Oportunidades de melhoria…"
+                                className="w-full p-2.5 rounded-lg border border-zinc-800/80 bg-zinc-900/35 text-xs text-zinc-100 focus:outline-none focus:border-zinc-600 resize-y"
+                              />
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-xs font-mono text-zinc-400 mb-1">
-                            Melhorias (Opcional)
-                          </label>
-                          <input
-                            type="text"
-                            value={melhorias}
-                            onChange={(e) => setMelhorias(e.target.value)}
-                            placeholder="Oportunidades de melhoria..."
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                      )}
 
-                  {/* Painel Direito: Nota_Final e Publicar */}
-                  <div className="lg:col-span-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] p-5 space-y-4">
-                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-                      <span className="text-xs font-semibold text-zinc-200 font-mono">
-                        Nota_Final
-                      </span>
-                      <span className="text-xs font-mono text-zinc-500">
-                        Meta:{" "}
-                        {Number(
-                          activeFormForCall.passingScorePercentage
-                        ).toFixed(0)}
-                        %
-                      </span>
-                    </div>
+                      {/* ABA 3: DADOS DO CLIENTE (VARIÁVEIS DINÂMICAS ESTILO ELEVENLABS) */}
+                      {studioRightTab === "customer" && (
+                        <div className="p-6 space-y-4">
+                          <h3 className="text-xs font-medium text-zinc-300">
+                            Variáveis dinâmicas
+                          </h3>
 
-                    {liveScore.fatalTriggered && (
-                      <div className="p-3 rounded-lg bg-red-950/60 border border-red-800 text-red-200 text-xs flex items-center gap-2">
-                        <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
-                        <span>falta_grave = true (Nota Zerada)</span>
-                      </div>
-                    )}
-
-                    <div className="py-5 text-center rounded-xl border border-zinc-800 bg-[#121215]">
-                      <p className="text-4xl font-bold tracking-tight text-zinc-50 font-mono tabular-nums">
-                        {liveScore.finalPercentage.toFixed(0)}
-                      </p>
-                      <p className="text-xs text-zinc-400 font-mono mt-1.5 tabular-nums">
-                        {liveScore.obtainedPoints} /{" "}
-                        {liveScore.maxPossiblePoints} pts (
-                        {liveScore.finalPercentage.toFixed(1)}%)
-                      </p>
-                    </div>
-
-                    <div className="p-3 rounded-lg border border-zinc-800/80 bg-[#121215] space-y-1.5 text-[11px] font-mono">
-                      <div className="flex justify-between">
-                        <span className="text-zinc-500">Setor:</span>
-                        <span className="text-zinc-200">
-                          {analystSector}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-zinc-500">Formulário:</span>
-                        <span className="text-zinc-200 truncate max-w-[160px]">
-                          {activeFormForCall.name}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-zinc-500">Ligações:</span>
-                        <span className="text-zinc-200">
-                          {recordings.length} arquivo(s)
-                        </span>
-                      </div>
-                      {isSacOrRetencao ? (
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Ticket Zendesk:</span>
-                          <span className="text-zinc-200">#{ticketInput}</span>
-                        </div>
-                      ) : (
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Telefone:</span>
-                          <span className="text-zinc-200">
-                            {extractCleanPhoneDigits(phoneInput) ||
-                              selectedCall.customerIdentifier}
-                          </span>
+                          <div className="divide-y divide-zinc-800/60 border-t border-b border-zinc-800/60">
+                            {(isSacOrRetencao
+                              ? [
+                                  {
+                                    key: "ticket_zendesk",
+                                    val: `#${ticketInput.replace(/^#/, "")}`,
+                                  },
+                                  {
+                                    key: "data_atendimento",
+                                    val: dataAtendimentoInput || "-",
+                                  },
+                                  {
+                                    key: "data_monitoria",
+                                    val: dataMonitoriaInput || "-",
+                                  },
+                                  {
+                                    key: "external_call_id",
+                                    val: selectedCall.externalCallId,
+                                  },
+                                ]
+                              : [
+                                  {
+                                    key: "telefone_portabilidade",
+                                    val:
+                                      extractCleanPhoneDigits(phoneInput) ||
+                                      selectedCall.customerIdentifier ||
+                                      "-",
+                                  },
+                                  {
+                                    key: "nome",
+                                    val: customerNameInput || "-",
+                                  },
+                                  {
+                                    key: "cpf",
+                                    val: customerCpfInput || "-",
+                                  },
+                                  {
+                                    key: "proposta",
+                                    val: proposalInput || "-",
+                                  },
+                                  {
+                                    key: "data_da_venda",
+                                    val: saleDateInput || "-",
+                                  },
+                                  {
+                                    key: "data_de_nascimento",
+                                    val: birthDateInput || "-",
+                                  },
+                                  {
+                                    key: "nome_da_mae",
+                                    val: customerMotherInput || "-",
+                                  },
+                                  {
+                                    key: "plano_contratado",
+                                    val: contractedPlanInput || "-",
+                                  },
+                                  {
+                                    key: "email",
+                                    val: emailInput || "-",
+                                  },
+                                  {
+                                    key: "forma_de_pagamento",
+                                    val: paymentMethodInput || "-",
+                                  },
+                                  {
+                                    key: "tipo_de_fatura",
+                                    val: invoiceTypeInput || "-",
+                                  },
+                                  {
+                                    key: "vencimento",
+                                    val: dueDateInput || "-",
+                                  },
+                                  {
+                                    key: "portabilidade_antecipada",
+                                    val: earlyPortabilityInput || "-",
+                                  },
+                                  {
+                                    key: "endereco_completo",
+                                    val: fullAddressInput || "-",
+                                  },
+                                ]
+                            ).map((row) => (
+                              <div
+                                key={row.key}
+                                className="py-2.5 flex items-start justify-between gap-4 text-xs"
+                              >
+                                <span
+                                  className="font-mono text-zinc-400 shrink-0"
+                                  translate="no"
+                                >
+                                  <span className="text-zinc-600 mr-1.5">
+                                    {"{}"}
+                                  </span>
+                                  {row.key}
+                                </span>
+                                <div className="flex items-center gap-2 min-w-0 text-right">
+                                  <span className="font-mono text-zinc-200 break-words">
+                                    {row.val}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    aria-label={`Copiar ${row.key}`}
+                                    onClick={() => {
+                                      navigator.clipboard
+                                        ?.writeText(row.val)
+                                        .catch(() => {});
+                                      setCopiedVarKey(row.key);
+                                      setTimeout(
+                                        () => setCopiedVarKey(null),
+                                        1500
+                                      );
+                                    }}
+                                    className="text-zinc-500 hover:text-zinc-200 shrink-0"
+                                  >
+                                    {copiedVarKey === row.key ? (
+                                      <Check
+                                        className="h-3 w-3 text-emerald-400"
+                                        aria-hidden="true"
+                                      />
+                                    ) : (
+                                      <Copy
+                                        className="h-3 w-3"
+                                        aria-hidden="true"
+                                      />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={submitEvaluationMutation.isPending}
-                      onClick={() => submitEvaluationMutation.mutate()}
-                      className="w-full h-10 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 font-semibold text-xs flex items-center justify-center gap-2 transition-colors"
-                    >
-                      <FileCheck2 className="h-4 w-4" />
-                      <span>
-                        {submitEvaluationMutation.isPending
-                          ? "Salvando..."
-                          : "Publicar Monitoria"}
+                    {/* Rodapé Enxuto do Painel Direito: Nota Final + Voltar + Publicar Monitoria */}
+                    <div className="h-12 px-6 border-t border-zinc-800/70 bg-[#0b0b0d] flex items-center justify-between gap-3 shrink-0">
+                      <div className="flex items-center gap-2 text-xs font-mono tabular-nums">
+                        <span className="text-zinc-500">Nota:</span>
+                        <span
+                          className={`font-semibold ${
+                            liveScore.fatalTriggered
+                              ? "text-red-400"
+                              : liveScore.status === "APROVADO"
+                              ? "text-emerald-400"
+                              : "text-zinc-100"
+                          }`}
+                        >
+                          {liveScore.finalPercentage.toFixed(0)}% (
+                          {liveScore.obtainedPoints}/
+                          {liveScore.maxPossiblePoints} pts)
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setStep(2)}
+                          className="h-8 px-3 rounded-md border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800 text-xs text-zinc-300 transition-colors"
+                        >
+                          Voltar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={submitEvaluationMutation.isPending}
+                          onClick={() => submitEvaluationMutation.mutate()}
+                          className="h-8 px-3.5 rounded-md bg-zinc-100 text-zinc-950 hover:bg-zinc-200 font-semibold text-xs inline-flex items-center gap-1.5 transition-colors"
+                        >
+                          <FileCheck2
+                            className="h-3.5 w-3.5"
+                            aria-hidden="true"
+                          />
+                          <span>
+                            {submitEvaluationMutation.isPending
+                              ? "Salvando…"
+                              : "Publicar Monitoria"}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ==================================================================
+                    BARRA INFERIOR DE ÁUDIO & WAVEFORM ACÚSTICA (IDÊNTICA AO ELEVENLABS)
+                   ================================================================== */}
+                <div className="px-6 py-2.5 border-t border-zinc-800/70 bg-[#09090b] shrink-0 space-y-2">
+                  {/* Linha 1: Controles Centrais Limpos sem Poluição Visual */}
+                  <div className="flex items-center justify-between gap-4">
+                    {/* Esquerda: Seletor de Áudio + Botão Marcar Minutagem */}
+                    <div className="flex items-center gap-2 min-w-0 w-1/3">
+                      {recordings.length > 1 ? (
+                        <div className="inline-flex items-center gap-1">
+                          {recordings.map((slot, idx) => (
+                            <button
+                              key={slot.id}
+                              type="button"
+                              onClick={() => setActiveRecordingIdx(idx)}
+                              className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${
+                                activeRecordingIdx === idx
+                                  ? "bg-zinc-100 text-zinc-950 font-semibold"
+                                  : "text-zinc-400 hover:text-zinc-200"
+                              }`}
+                            >
+                              Áudio #{idx + 1}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] font-mono text-zinc-500 truncate max-w-[200px]">
+                          {activeStudioRecording?.file?.name ||
+                            selectedCall.externalCallId}
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const stamp = formatMmSs(studioCurrentTime);
+                          setGeneralFeedback((prev) =>
+                            prev
+                              ? `${prev}\n• [${stamp}] `
+                              : `• [${stamp}] `
+                          );
+                          setStudioRightTab("observations");
+                        }}
+                        className="px-2 py-0.5 rounded border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800 text-[11px] font-mono text-zinc-400 hover:text-zinc-200 transition-colors shrink-0 tabular-nums"
+                      >
+                        + [{formatMmSs(studioCurrentTime)}]
+                      </button>
+                    </div>
+
+                    {/* Centro: Velocidade + ↺ + Play/Pause + ↻ + 0:00 / 15:04 (Idêntico ao ElevenLabs) */}
+                    <div className="flex items-center justify-center gap-3 w-1/3">
+                      <button
+                        type="button"
+                        aria-label="Alternar velocidade de reprodução"
+                        onClick={() => {
+                          const rates = [1, 1.25, 1.5, 2, 0.75];
+                          const next =
+                            rates[
+                              (rates.indexOf(studioSpeed) + 1) % rates.length
+                            ];
+                          setStudioSpeed(next);
+                          if (studioAudioRef.current) {
+                            studioAudioRef.current.playbackRate = next;
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded text-xs font-mono text-zinc-400 hover:text-zinc-100 transition-colors tabular-nums"
+                      >
+                        {studioSpeed}x
+                      </button>
+
+                      <button
+                        type="button"
+                        aria-label="Retroceder 5 segundos"
+                        onClick={() => skipStudioSeconds(-5)}
+                        className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 transition-colors"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+
+                      <button
+                        type="button"
+                        aria-label={
+                          studioPlaying ? "Pausar áudio" : "Reproduzir áudio"
+                        }
+                        onClick={toggleStudioPlay}
+                        className="h-8 w-8 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-950 flex items-center justify-center transition-transform active:scale-95"
+                      >
+                        {studioPlaying ? (
+                          <Pause
+                            className="h-3.5 w-3.5 fill-current"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Play
+                            className="h-3.5 w-3.5 ml-0.5 fill-current"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        aria-label="Avançar 5 segundos"
+                        onClick={() => skipStudioSeconds(5)}
+                        className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 transition-colors"
+                      >
+                        <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+
+                      <span className="text-xs font-mono text-zinc-400 tabular-nums whitespace-nowrap">
+                        {formatMmSs(studioCurrentTime)} /{" "}
+                        {formatMmSs(studioDuration)}
                       </span>
-                    </button>
+                    </div>
+
+                    {/* Direita: Volume Minimalista */}
+                    <div className="flex items-center justify-end gap-2 w-1/3">
+                      <button
+                        type="button"
+                        aria-label={
+                          studioMuted ? "Ativar som" : "Silenciar áudio"
+                        }
+                        onClick={() => {
+                          const nextMuted = !studioMuted;
+                          setStudioMuted(nextMuted);
+                          if (studioAudioRef.current) {
+                            studioAudioRef.current.muted = nextMuted;
+                          }
+                        }}
+                        className="text-zinc-400 hover:text-zinc-100"
+                      >
+                        {studioMuted ? (
+                          <VolumeX
+                            className="h-3.5 w-3.5 text-red-400"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Volume2
+                            className="h-3.5 w-3.5"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </button>
+                      <input
+                        type="range"
+                        aria-label="Volume do áudio"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={studioMuted ? 0 : studioVolume}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setStudioVolume(val);
+                          setStudioMuted(val === 0);
+                          if (studioAudioRef.current) {
+                            studioAudioRef.current.volume = val;
+                            studioAudioRef.current.muted = val === 0;
+                          }
+                        }}
+                        className="w-16 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-zinc-200 hidden sm:block"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Linha 2: Waveform Acústica Limpa (Sem Caixa Pesada • Idêntico ao ElevenLabs) */}
+                  <div
+                    role="slider"
+                    aria-label="Linha do tempo do áudio"
+                    aria-valuemin={0}
+                    aria-valuemax={studioDuration || 180}
+                    aria-valuenow={Math.round(studioCurrentTime)}
+                    tabIndex={0}
+                    className="relative h-6 w-full flex items-center gap-[3px] cursor-pointer select-none"
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const ratio = Math.max(
+                        0,
+                        Math.min(1, (e.clientX - rect.left) / rect.width)
+                      );
+                      seekStudioAudioTo(ratio * (studioDuration || 180), true);
+                    }}
+                  >
+                    {WAVEFORM_BARS_HEIGHTS.map((barHeight, idx) => {
+                      const progressRatio =
+                        studioDuration > 0
+                          ? studioCurrentTime / studioDuration
+                          : 0;
+                      const barRatio = idx / WAVEFORM_BARS_HEIGHTS.length;
+                      const isPlayed = barRatio <= progressRatio;
+                      return (
+                        <div
+                          key={idx}
+                          style={{ height: `${Math.max(16, barHeight * 0.6)}%` }}
+                          className={`flex-1 rounded-full transition-colors duration-75 ${
+                            isPlayed ? "bg-zinc-200" : "bg-zinc-800"
+                          }`}
+                        />
+                      );
+                    })}
+
+                    {/* Marcadores de Minutagem de Falhas */}
+                    {extractWaveformMarkers(
+                      motivoFaltaGrave,
+                      generalFeedback,
+                      liveScore.fatalTriggered
+                    ).map((marker) => {
+                      const pct =
+                        studioDuration > 0
+                          ? Math.min(
+                              98,
+                              Math.max(
+                                1,
+                                (marker.seconds / studioDuration) * 100
+                              )
+                            )
+                          : 0;
+                      if (pct <= 0) return null;
+                      return (
+                        <button
+                          key={`${marker.label}-${marker.seconds}`}
+                          type="button"
+                          aria-label={`Ir para ${marker.label}: ${marker.description}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            seekStudioAudioTo(marker.seconds, true);
+                          }}
+                          style={{ left: `${pct}%` }}
+                          title={`[${marker.label}] ${marker.description}`}
+                          className={`absolute top-0 bottom-0 w-0.5 z-10 ${
+                            marker.isFatal ? "bg-red-500" : "bg-amber-400"
+                          }`}
+                        />
+                      );
+                    })}
                   </div>
                 </div>
               </motion.div>
