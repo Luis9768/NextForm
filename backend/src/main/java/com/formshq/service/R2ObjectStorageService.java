@@ -190,8 +190,11 @@ public class R2ObjectStorageService {
             String credentialScope = dateStamp + "/" + region + "/s3/aws4_request";
             String credential = accessKeyId + "/" + credentialScope;
 
+            String encodedCredential = URLEncoder.encode(credential, StandardCharsets.UTF_8)
+                    .replace("+", "%20");
+
             String canonicalQueryString = "X-Amz-Algorithm=AWS4-HMAC-SHA256"
-                    + "&X-Amz-Credential=" + encodeUriSegment(credential)
+                    + "&X-Amz-Credential=" + encodedCredential
                     + "&X-Amz-Date=" + amzDate
                     + "&X-Amz-Expires=" + Math.max(60, Math.min(expirationSeconds, 604800))
                     + "&X-Amz-SignedHeaders=host";

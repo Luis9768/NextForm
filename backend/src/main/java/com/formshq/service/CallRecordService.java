@@ -445,8 +445,16 @@ public class CallRecordService {
                     ? directusBaseUrl.trim().replaceAll("/+$", "")
                     : "";
 
+            String publicDirectusAudioUrl = (!cleanDirectusBase.isEmpty() && directusUploadedId != null && !directusUploadedId.isBlank())
+                    ? (cleanDirectusBase + "/assets/" + directusUploadedId)
+                    : null;
+
             String presignedR2Url = r2ObjectStorageService.generatePresignedGetUrl(r2FileKey, 86400)
                     .orElse(null);
+
+            String reachableAudioUrl = publicDirectusAudioUrl != null
+                    ? publicDirectusAudioUrl
+                    : (presignedR2Url != null ? presignedR2Url : audioUrl);
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("id", callIdStr);
@@ -465,15 +473,15 @@ public class CallRecordService {
             if (presignedR2Url != null) {
                 payload.put("r2PresignedUrl", presignedR2Url);
             }
-            if (!cleanDirectusBase.isEmpty()) {
-                payload.put("directusAssetUrl", cleanDirectusBase + "/assets/" + effectiveLigacaoId);
+            if (publicDirectusAudioUrl != null) {
+                payload.put("directusAssetUrl", publicDirectusAudioUrl);
             }
             if (directusReturnId != null && !directusReturnId.isBlank()) {
                 payload.put("Ligacao_Retorno", directusReturnId);
                 payload.put("Audio_Ligacao_Retorno", directusReturnId);
                 payload.put("audio_chamada_retorno", directusReturnId);
             }
-            payload.put("audioUrl", presignedR2Url != null ? presignedR2Url : audioUrl);
+            payload.put("audioUrl", reachableAudioUrl);
             payload.put("Operador", analyst.getId().toString());
             payload.put("operadorNome", analyst.getName());
             payload.put("operadorEmail", analyst.getEmail());

@@ -324,6 +324,7 @@ function AnalystEvaluationFlowInner() {
       const rawTranscricao =
         (typeof dataMap.Transcricao === "string" && dataMap.Transcricao) ||
         (typeof dataMap.transcricao === "string" && dataMap.transcricao) ||
+        (typeof dataMap.transcription === "string" && dataMap.transcription) ||
         "";
       if (rawTranscricao.trim()) {
         setTranscricaoInput(
@@ -333,6 +334,24 @@ function AnalystEvaluationFlowInner() {
             .trim()
         );
         appliedAny = true;
+      } else {
+        const minGraves =
+          typeof dataMap.minutagem_faltas_graves === "string" &&
+          dataMap.minutagem_faltas_graves !== "N/A"
+            ? dataMap.minutagem_faltas_graves.trim()
+            : "";
+        const minComuns =
+          typeof dataMap.minutagem_falhas_comuns === "string" &&
+          dataMap.minutagem_falhas_comuns !== "N/A"
+            ? dataMap.minutagem_falhas_comuns.trim()
+            : "";
+        const combinedMinutagem = [minGraves, minComuns]
+          .filter(Boolean)
+          .join("\n");
+        if (combinedMinutagem) {
+          setTranscricaoInput(combinedMinutagem);
+          appliedAny = true;
+        }
       }
 
       const rawObs =
