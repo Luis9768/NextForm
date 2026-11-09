@@ -13,6 +13,8 @@ import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public record CallRecordResponse(
         UUID id,
@@ -33,6 +35,10 @@ public record CallRecordResponse(
         Boolean fatalErrorTriggered,
         OffsetDateTime createdAt
 ) implements Serializable {
+
+    private static final Pattern TRANSCRIPT_TIME_PATTERN =
+            Pattern.compile("\\[(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\]");
+
     public static CallRecordResponse fromEntity(CallRecord callRecord) {
         return buildResponse(callRecord, false);
     }
@@ -51,9 +57,7 @@ public record CallRecordResponse(
         if ((resolvedDuration == null || resolvedDuration == 210) && rawMeta != null) {
             Object trObj = rawMeta.get("transcricao");
             if (trObj instanceof String tr && !tr.isBlank()) {
-                java.util.regex.Matcher mTime = java.util.regex.Pattern
-                        .compile("\\[(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\]")
-                        .matcher(tr);
+                Matcher mTime = TRANSCRIPT_TIME_PATTERN.matcher(tr);
                 int maxSecs = 0;
                 while (mTime.find()) {
                     try {
@@ -73,9 +77,11 @@ public record CallRecordResponse(
             }
         }
         Map<String, Object> finalMeta = rawMeta;
-        if (omitLargeTranscript && rawMeta != null && rawMeta.containsKey("transcricao")) {
+        if (omitLargeTranscript && rawMeta != null
+                && (rawMeta.containsKey("transcricao") || rawMeta.containsKey("aiEvaluationData"))) {
             finalMeta = new LinkedHashMap<>(rawMeta);
             finalMeta.remove("transcricao");
+            finalMeta.remove("aiEvaluationData");
         }
         return new CallRecordResponse(
                 callRecord.getId(),

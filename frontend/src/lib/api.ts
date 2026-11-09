@@ -240,6 +240,7 @@ export const callsApi = {
     attendanceDate?: string;
     monitoringDate?: string;
     sector?: string;
+    formTemplateId?: string;
   }): Promise<CallRecord> => {
     const formData = new FormData();
     if (params.files && params.files.length > 0) {
@@ -279,11 +280,18 @@ export const callsApi = {
     if (params.sector) {
       formData.append("sector", params.sector);
     }
+    if (params.formTemplateId) {
+      formData.append("formTemplateId", params.formTemplateId);
+    }
     const { data } = await api.post<CallRecord>("/calls/upload", formData, {
       headers: {
-        "Content-Type": "multipart/form-data",
+        "Content-Type": undefined,
       },
     });
+    return data;
+  },
+  retryAudioWebhook: async (id: string): Promise<CallRecord> => {
+    const { data } = await api.post<CallRecord>(`/calls/${id}/retry-webhook`);
     return data;
   },
   syncDetectedDuration: async (

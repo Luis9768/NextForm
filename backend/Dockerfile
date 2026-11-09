@@ -35,7 +35,7 @@ USER spring:spring
 
 EXPOSE 8080
 
-ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/./urandom"
+ENV JAVA_OPTS="-XX:+UseContainerSupport -Xms256m -Xmx512m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:G1PeriodicGCInterval=30000 -XX:MaxMetaspaceSize=160m -Djava.security.egd=file:/dev/./urandom"
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
   CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/actuator/health || exit 1

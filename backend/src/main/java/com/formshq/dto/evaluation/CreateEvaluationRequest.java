@@ -18,5 +18,16 @@ public record CreateEvaluationRequest(
         @Valid
         List<ItemEvaluationInput> answers,
 
-        String generalFeedback
-) {}
+        String generalFeedback,
+
+        String transcricao
+) {
+    public CreateEvaluationRequest(
+            UUID callRecordId,
+            UUID formTemplateId,
+            List<ItemEvaluationInput> answers,
+            String generalFeedback
+    ) {
+        this(callRecordId, formTemplateId, answers, generalFeedback, null);
+    }
+}

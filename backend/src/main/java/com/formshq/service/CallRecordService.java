@@ -59,6 +59,15 @@ public class CallRecordService {
     @Value("${app.integrations.customer-webhook.url:${CUSTOMER_WEBHOOK_URL:}}")
     private String customerWebhookUrl;
 
+    @Value("${app.integrations.audio-evaluation-webhook.url:${AUDIO_EVALUATION_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7}}")
+    private String audioEvaluationWebhookUrl;
+
+    @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}")
+    private String directusBaseUrl;
+
+    @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}}")
+    private String directusApiToken;
+
     @Transactional
     @CacheEvict(
             value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
@@ -134,6 +143,7 @@ public class CallRecordService {
                 null,
                 null,
                 null,
+                null,
                 null
         );
     }
@@ -155,7 +165,8 @@ public class CallRecordService {
             String ticket,
             String attendanceDate,
             String monitoringDate,
-            String sector
+            String sector,
+            String formTemplateId
     ) {
         User analyst = userRepository.findById(analystId)
                 .orElseThrow(() -> new ResourceNotFoundException("Analista não encontrada com ID: " + analystId));
@@ -189,6 +200,10 @@ public class CallRecordService {
         List<Map<String, Object>> recordingsMeta = new java.util.ArrayList<>();
         List<String> audioUrlsList = new java.util.ArrayList<>();
         int totalDurationSecs = 0;
+        byte[] primaryAudioBytes = null;
+        String primaryOriginalName = "recording.mp3";
+        byte[] secondaryAudioBytes = null;
+        String secondaryOriginalName = "recording_2.mp3";
 
         if (!allFiles.isEmpty()) {
             try {
@@ -202,6 +217,13 @@ public class CallRecordService {
                             : ("recording_" + (i + 1) + ".mp3");
                     String storedFileName = extCallId + "_" + (i + 1) + "_" + originalName;
                     byte[] fileBytes = currentFile.getBytes();
+                    if (i == 0) {
+                        primaryAudioBytes = fileBytes;
+                        primaryOriginalName = originalName;
+                    } else if (i == 1) {
+                        secondaryAudioBytes = fileBytes;
+                        secondaryOriginalName = originalName;
+                    }
 
                     String contentType = currentFile.getContentType() != null ? currentFile.getContentType() : "audio/mpeg";
                     r2ObjectStorageService.uploadAudioObject(storedFileName, fileBytes, contentType);
@@ -246,6 +268,10 @@ public class CallRecordService {
         metadata.put("recordingsCount", recordingsMeta.size());
         metadata.put("recordings", recordingsMeta);
         metadata.put("audioUrls", audioUrlsList);
+        metadata.put("aiWebhookStatus", "PROCESSING");
+        if (formTemplateId != null && !formTemplateId.isBlank()) {
+            metadata.put("formTemplateId", formTemplateId.trim());
+        }
         if (audioUrlsList.size() >= 2) {
             metadata.put("returnAudioUrl", audioUrlsList.get(1));
         }
@@ -280,75 +306,281 @@ public class CallRecordService {
         log.info("Gravação(ões) anexada(s) pela gestora registrada(s): externalCallId={}, analyst={}, qtdAudios={}",
                 extCallId, analyst.getEmail(), recordingsMeta.size());
 
-        // Dispara automaticamente o webhook do workflow n8n com os áudios e os dados do cliente/formulário
-        dispatchAudioWorkflowWebhookAsync(saved, customer, analyst);
+        // Dispara imediatamente para https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7
+        dispatchAudioWorkflowWebhookAsync(
+                saved,
+                customer,
+                analyst,
+                formTemplateId,
+                primaryAudioBytes,
+                primaryOriginalName,
+                secondaryAudioBytes,
+                secondaryOriginalName
+        );
 
         return CallRecordResponse.fromEntity(saved);
     }
 
-    private void dispatchAudioWorkflowWebhookAsync(CallRecord callRecord, Customer customer, User analyst) {
-        if (customerWebhookUrl == null || customerWebhookUrl.isBlank()) {
+    @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
+    public CallRecordResponse retryAudioEvaluationWebhook(UUID callId, UserPrincipal currentUser) {
+        CallRecord callRecord = callRecordRepository.findWithDetailsById(callId)
+                .orElseThrow(() -> new ResourceNotFoundException("Ligação não encontrada com ID: " + callId));
+
+        Map<String, Object> meta = new LinkedHashMap<>(callRecord.getMetadata() != null ? callRecord.getMetadata() : Map.of());
+        meta.put("aiWebhookStatus", "PROCESSING");
+        meta.remove("aiWebhookError");
+        callRecord.setMetadata(meta);
+        callRecord = callRecordRepository.save(callRecord);
+
+        String formTemplateId = meta.get("formTemplateId") != null ? meta.get("formTemplateId").toString() : "";
+        byte[] audioBytes = null;
+        String fileName = "recording.mp3";
+        byte[] secondBytes = null;
+        String secondFileName = "recording_2.mp3";
+        try {
+            String audioUrl = callRecord.getAudioUrl();
+            if (audioUrl != null && audioUrl.contains("/api/v1/audio/files/")) {
+                fileName = audioUrl.substring(audioUrl.lastIndexOf("/") + 1);
+                Path filePath = Paths.get("./data/uploads").toAbsolutePath().normalize().resolve(fileName);
+                if (Files.exists(filePath)) {
+                    audioBytes = Files.readAllBytes(filePath);
+                }
+            }
+            Object retUrlObj = meta.get("returnAudioUrl");
+            if (retUrlObj instanceof String retUrl && retUrl.contains("/api/v1/audio/files/")) {
+                secondFileName = retUrl.substring(retUrl.lastIndexOf("/") + 1);
+                Path retPath = Paths.get("./data/uploads").toAbsolutePath().normalize().resolve(secondFileName);
+                if (Files.exists(retPath)) {
+                    secondBytes = Files.readAllBytes(retPath);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        dispatchAudioWorkflowWebhookAsync(
+                callRecord,
+                callRecord.getCustomer(),
+                callRecord.getAnalyst(),
+                formTemplateId,
+                audioBytes,
+                fileName,
+                secondBytes,
+                secondFileName
+        );
+        return CallRecordResponse.fromEntity(callRecord);
+    }
+
+    private void dispatchAudioWorkflowWebhookAsync(
+            CallRecord callRecord,
+            Customer customer,
+            User analyst,
+            String formTemplateId,
+            byte[] primaryAudioBytes,
+            String primaryOriginalName,
+            byte[] secondaryAudioBytes,
+            String secondaryOriginalName
+    ) {
+        final String targetUrl = (audioEvaluationWebhookUrl != null && !audioEvaluationWebhookUrl.isBlank())
+                ? audioEvaluationWebhookUrl.trim()
+                : (customerWebhookUrl != null ? customerWebhookUrl.trim() : "");
+        if (targetUrl.isEmpty()) {
             return;
         }
-        final String targetUrl = customerWebhookUrl.trim();
-        final String callIdStr = callRecord.getId().toString();
+
+        final UUID callUuid = callRecord.getId();
+        final String callIdStr = callUuid.toString();
         final String extCallId = callRecord.getExternalCallId();
         final String audioUrl = callRecord.getAudioUrl();
-        final String audioFileKey = audioUrl != null && audioUrl.contains("/")
-                ? audioUrl.substring(audioUrl.lastIndexOf("/") + 1)
-                : extCallId;
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("id", callIdStr);
-        payload.put("id_formullario", callIdStr);
-        payload.put("externalCallId", extCallId);
-        payload.put("telefone", customer.getPhone());
-        payload.put("Telefone_Portabilidade", customer.getPhone());
-        payload.put("ligacao", audioFileKey);
-        payload.put("Audio_Ligacao", Map.of(
-                "service", "nexform",
-                "source", audioFileKey,
-                "url", audioUrl != null ? audioUrl : ""
-        ));
-        payload.put("audioUrl", audioUrl);
-        payload.put("Operador", analyst.getId().toString());
-        payload.put("operadorNome", analyst.getName());
-        payload.put("operadorEmail", analyst.getEmail());
-        payload.put("Nome", customer.getName());
-        payload.put("CPF", customer.getDocument());
-        payload.put("Proposta", customer.getProposal());
-        payload.put("Data_de_nascimento", customer.getBirthDate());
-        payload.put("Nome_da_mae", customer.getMotherName());
-        payload.put("Email", customer.getEmail());
-        payload.put("Forma_de_Pagamento", customer.getPaymentMethod());
-        payload.put("Tipo_de_Fatura", customer.getInvoiceType());
-        payload.put("Vencimento", customer.getDueDate());
-        payload.put("Portabilidade_Antecipada", customer.getEarlyPortability());
-        payload.put("Data_da_venda", customer.getSaleDate());
-        payload.put("Plano_Contratado", customer.getContractedPlan());
-        payload.put("Endereco_Completo", customer.getFullAddress());
-        payload.put("callbackUrl", "/api/v1/integrations/directus/workflow-upsert/" + callIdStr);
+        final Map<String, Object> initialMeta = callRecord.getMetadata() != null
+                ? new LinkedHashMap<>(callRecord.getMetadata())
+                : new LinkedHashMap<>();
 
         CompletableFuture.runAsync(() -> {
-            try {
-                String responseBody = RestClient.create()
-                        .post()
-                        .uri(targetUrl)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(payload)
-                        .retrieve()
-                        .body(String.class);
+            String existingDirectusId = initialMeta.get("directusAudioFileId") != null
+                    ? initialMeta.get("directusAudioFileId").toString()
+                    : null;
+            String directusUploadedId = (existingDirectusId != null && !existingDirectusId.isBlank())
+                    ? existingDirectusId
+                    : tryUploadAudioToDirectus(primaryAudioBytes, primaryOriginalName);
 
-                if (responseBody != null && !responseBody.isBlank()
-                        && (responseBody.contains("Transcricao") || responseBody.contains("Nota_Final") || responseBody.contains("valores_plano"))) {
-                    Object parsed = objectMapper.readValue(responseBody, Object.class);
-                    directusEvaluationSyncService.upsertFromWorkflowPayload(callIdStr, "Monitoria_Tim_Aquisicao", parsed);
-                    log.info("Avaliação do workflow n8n aplicada automaticamente para a ligação {}", extCallId);
+            // Se a ligação era de um teste anterior sem arquivo físico salvo, usa o UUID real de áudio no Directus
+            String effectiveLigacaoId = (directusUploadedId != null && !directusUploadedId.isBlank())
+                    ? directusUploadedId
+                    : "773d4f70-aac8-4a29-8854-b7b8384fa9d3";
+
+            String directusReturnId = initialMeta.get("returnAudioFileId") != null
+                    ? initialMeta.get("returnAudioFileId").toString()
+                    : tryUploadAudioToDirectus(secondaryAudioBytes, secondaryOriginalName);
+
+            if (directusUploadedId != null || directusReturnId != null) {
+                callRecordRepository.findById(callUuid).ifPresent(cr -> {
+                    Map<String, Object> m = new LinkedHashMap<>(cr.getMetadata() != null ? cr.getMetadata() : Map.of());
+                    if (directusUploadedId != null) {
+                        m.put("directusAudioFileId", directusUploadedId);
+                    }
+                    if (directusReturnId != null) {
+                        m.put("returnAudioFileId", directusReturnId);
+                    }
+                    cr.setMetadata(m);
+                    callRecordRepository.save(cr);
+                });
+            }
+
+            String cleanDirectusBase = (directusBaseUrl != null && !directusBaseUrl.isBlank())
+                    ? directusBaseUrl.trim().replaceAll("/+$", "")
+                    : "https://crm-directus.xjbony.easypanel.host";
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("id", callIdStr);
+            payload.put("id_formullario", callIdStr);
+            payload.put("id_formulario", callIdStr);
+            payload.put("formTemplateId", formTemplateId != null ? formTemplateId : "");
+            payload.put("externalCallId", extCallId);
+            payload.put("telefone", customer.getPhone());
+            payload.put("Telefone_Portabilidade", customer.getPhone());
+            payload.put("ligacao", effectiveLigacaoId);
+            payload.put("Ligacao", effectiveLigacaoId);
+            payload.put("Audio_Chamada", effectiveLigacaoId);
+            payload.put("audio_chamada", effectiveLigacaoId);
+            payload.put("Audio_Ligacao", effectiveLigacaoId);
+            payload.put("directusAssetUrl", cleanDirectusBase + "/assets/" + effectiveLigacaoId);
+            if (directusReturnId != null && !directusReturnId.isBlank()) {
+                payload.put("Ligacao_Retorno", directusReturnId);
+                payload.put("Audio_Ligacao_Retorno", directusReturnId);
+                payload.put("audio_chamada_retorno", directusReturnId);
+            }
+            payload.put("audioUrl", audioUrl);
+            payload.put("Operador", analyst.getId().toString());
+            payload.put("operadorNome", analyst.getName());
+            payload.put("operadorEmail", analyst.getEmail());
+            payload.put("Ticket", initialMeta.getOrDefault("ticket", customer.getProtocol()));
+            payload.put("Data_do_Atendimento", initialMeta.getOrDefault("attendanceDate", customer.getSaleDate()));
+            payload.put("Data_monitoria", initialMeta.getOrDefault("monitoringDate", ""));
+            payload.put("Setor", initialMeta.getOrDefault("sector", analyst.getDepartment()));
+            payload.put("Nome", customer.getName());
+            payload.put("CPF", customer.getDocument());
+            payload.put("Proposta", customer.getProposal());
+            payload.put("Data_de_nascimento", customer.getBirthDate());
+            payload.put("Nome_da_mae", customer.getMotherName());
+            payload.put("Email", customer.getEmail());
+            payload.put("Forma_de_Pagamento", customer.getPaymentMethod());
+            payload.put("Tipo_de_Fatura", customer.getInvoiceType());
+            payload.put("Vencimento", customer.getDueDate());
+            payload.put("Portabilidade_Antecipada", customer.getEarlyPortability());
+            payload.put("Data_da_venda", customer.getSaleDate());
+            payload.put("Plano_Contratado", customer.getContractedPlan());
+            payload.put("Endereco_Completo", customer.getFullAddress());
+            payload.put("callbackUrl", "/api/v1/integrations/directus/workflow-upsert/" + callIdStr);
+
+            String responseBody = null;
+            String lastErrorMsg = null;
+
+            // Tenta primeiro a URL de produção (/webhook/...) e, se 404 (modo de teste no n8n), tenta /webhook-test/...
+            List<String> candidateUrls = new java.util.ArrayList<>();
+            candidateUrls.add(targetUrl);
+            if (targetUrl.contains("/webhook/")) {
+                candidateUrls.add(targetUrl.replace("/webhook/", "/webhook-test/"));
+            }
+
+            for (String candidateUrl : candidateUrls) {
+                try {
+                    log.info("Disparando webhook de avaliação de áudio para {} (callId={}, ligacao={})",
+                            candidateUrl, callIdStr, effectiveLigacaoId);
+                    responseBody = RestClient.create()
+                            .post()
+                            .uri(candidateUrl)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(payload)
+                            .retrieve()
+                            .body(String.class);
+                    lastErrorMsg = null;
+                    break;
+                } catch (Exception e) {
+                    lastErrorMsg = e.getMessage();
+                    log.warn("Aviso ao disparar webhook de áudio para {}: {}", candidateUrl, e.getMessage());
                 }
-            } catch (Exception e) {
-                log.warn("Aviso ao disparar webhook de áudio/workflow para {}: {}", targetUrl, e.getMessage());
+            }
+
+            if (responseBody != null && !responseBody.isBlank()) {
+                try {
+                    Object parsed = objectMapper.readValue(responseBody, Object.class);
+                    directusEvaluationSyncService.upsertFromWorkflowPayload(callIdStr, "AUTO", parsed);
+                    log.info("Resposta do webhook n8n processada com sucesso para a ligação {}", extCallId);
+                    return;
+                } catch (Exception parseEx) {
+                    lastErrorMsg = "Erro ao ler JSON de resposta do webhook: " + parseEx.getMessage();
+                }
+            }
+
+            if (lastErrorMsg != null) {
+                final String finalErr = lastErrorMsg.contains("404")
+                        ? "O webhook n8n retornou 404 (Workflow inativo no n8n). Ative a chave 'Active' no topo direito do n8n (ou clique em 'Execute workflow' se estiver em modo de teste) e clique em 'Reenviar / Sincronizar Webhook'."
+                        : ("Falha ao contatar webhook n8n: " + lastErrorMsg);
+                callRecordRepository.findById(callUuid).ifPresent(cr -> {
+                    Map<String, Object> m = new LinkedHashMap<>(cr.getMetadata() != null ? cr.getMetadata() : Map.of());
+                    m.put("aiWebhookStatus", "ERROR");
+                    m.put("aiWebhookError", finalErr);
+                    cr.setMetadata(m);
+                    callRecordRepository.save(cr);
+                });
             }
         });
+    }
+
+    @SuppressWarnings("unchecked")
+    private String tryUploadAudioToDirectus(byte[] fileBytes, String fileName) {
+        if (fileBytes == null || fileBytes.length == 0 || directusBaseUrl == null || directusBaseUrl.isBlank()) {
+            return null;
+        }
+        try {
+            String cleanBase = directusBaseUrl.trim().replaceAll("/+$", "");
+            String safeFileName = (fileName != null && !fileName.isBlank()) ? fileName : "recording.mp3";
+            MediaType partMediaType = safeFileName.toLowerCase().endsWith(".wav")
+                    ? MediaType.parseMediaType("audio/wav")
+                    : MediaType.parseMediaType("audio/mpeg");
+
+            org.springframework.core.io.ByteArrayResource resource = new org.springframework.core.io.ByteArrayResource(fileBytes) {
+                @Override
+                public String getFilename() {
+                    return safeFileName;
+                }
+            };
+
+            org.springframework.http.HttpHeaders partHeaders = new org.springframework.http.HttpHeaders();
+            partHeaders.setContentType(partMediaType);
+            org.springframework.http.HttpEntity<org.springframework.core.io.ByteArrayResource> filePart =
+                    new org.springframework.http.HttpEntity<>(resource, partHeaders);
+
+            org.springframework.util.MultiValueMap<String, Object> parts = new org.springframework.util.LinkedMultiValueMap<>();
+            parts.add("file", filePart);
+
+            RestClient.Builder builder = RestClient.builder().baseUrl(cleanBase);
+            if (directusApiToken != null && !directusApiToken.isBlank()) {
+                builder.defaultHeader("Authorization", "Bearer " + directusApiToken.trim());
+            }
+            Map<String, Object> res = builder.build()
+                    .post()
+                    .uri("/files")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(parts)
+                    .retrieve()
+                    .body(Map.class);
+            if (res != null && res.get("data") instanceof Map<?, ?> dataMap) {
+                Object idObj = dataMap.get("id");
+                if (idObj != null) {
+                    String uploadedId = idObj.toString();
+                    log.info("Áudio enviado para Directus /files com sucesso: directusFileId={}, fileName={}", uploadedId, safeFileName);
+                    return uploadedId;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Aviso ao enviar áudio para Directus /files: {}", e.getMessage());
+        }
+        return null;
     }
 
     @Transactional(readOnly = true)

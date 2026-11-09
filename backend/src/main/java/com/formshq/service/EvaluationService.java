@@ -59,8 +59,27 @@ public class EvaluationService {
         CallRecord callRecord = callRecordRepository.findWithDetailsById(request.callRecordId())
                 .orElseThrow(() -> new ResourceNotFoundException("Ligação não encontrada com ID: " + request.callRecordId()));
 
-        if (callRecord.getStatus() == CallStatus.AVALIADA || evaluationRepository.existsByCallRecordId(callRecord.getId())) {
+        boolean isAiPreEvaluatedDraft = callRecord.getMetadata() != null
+                && (callRecord.getMetadata().containsKey("aiEvaluationData") || "upload-manual".equals(callRecord.getChannel()));
+
+        if (!isAiPreEvaluatedDraft && (callRecord.getStatus() == CallStatus.AVALIADA || evaluationRepository.existsByCallRecordId(callRecord.getId()))) {
             throw new DuplicateResourceException("Esta ligação já foi avaliada anteriormente.");
+        }
+
+        if (isAiPreEvaluatedDraft && callRecord.getEvaluation() != null) {
+            Evaluation oldDraft = callRecord.getEvaluation();
+            callRecord.setEvaluation(null);
+            callRecordRepository.saveAndFlush(callRecord);
+            evaluationRepository.delete(oldDraft);
+            evaluationRepository.flush();
+        }
+
+        if (request.transcricao() != null && !request.transcricao().isBlank()) {
+            Map<String, Object> updatedMeta = new java.util.LinkedHashMap<>(
+                    callRecord.getMetadata() != null ? callRecord.getMetadata() : Map.of()
+            );
+            updatedMeta.put("transcricao", request.transcricao().trim());
+            callRecord.setMetadata(updatedMeta);
         }
 
         EvaluationFormTemplate formTemplate = formTemplateRepository.findWithItemsById(request.formTemplateId())

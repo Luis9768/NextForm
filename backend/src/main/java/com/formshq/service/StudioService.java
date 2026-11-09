@@ -652,7 +652,11 @@ public class StudioService {
     public List<StudioActivityDto> listActivity() {
         List<StudioActivityDto> events = new ArrayList<>(customFlowActivities);
 
-        for (Evaluation ev : evaluationRepository.findAllByOrderByEvaluatedAtDesc()) {
+        List<Evaluation> recentEvals = evaluationRepository.findAllSummaryByOrderByEvaluatedAtDesc()
+                .stream()
+                .limit(20)
+                .toList();
+        for (Evaluation ev : recentEvals) {
             events.add(new StudioActivityDto(
                     "act-eval-" + ev.getId(),
                     ev.isFatalErrorTriggered() ? "evaluation.fatal_zero" : "evaluation.submit",
@@ -671,7 +675,11 @@ public class StudioService {
             ));
         }
 
-        for (CallRecord call : callRecordRepository.findAllByOrderByCallDateDesc()) {
+        List<CallRecord> recentCalls = callRecordRepository.findAllByOrderByCallDateDesc()
+                .stream()
+                .limit(20)
+                .toList();
+        for (CallRecord call : recentCalls) {
             events.add(new StudioActivityDto(
                     "act-call-" + call.getId(),
                     "call.recording.ingest",

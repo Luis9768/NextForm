@@ -21,8 +21,7 @@ public interface EvaluationRepository extends JpaRepository<Evaluation, UUID> {
             "evaluator.manager",
             "analyst",
             "analyst.manager",
-            "formTemplate",
-            "itemSnapshots"
+            "formTemplate"
     })
     List<Evaluation> findAllByOrderByEvaluatedAtDesc();
 
@@ -33,8 +32,7 @@ public interface EvaluationRepository extends JpaRepository<Evaluation, UUID> {
             "evaluator.manager",
             "analyst",
             "analyst.manager",
-            "formTemplate",
-            "itemSnapshots"
+            "formTemplate"
     })
     List<Evaluation> findByAnalystIdOrderByEvaluatedAtDesc(UUID analystId);
 

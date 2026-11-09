@@ -137,6 +137,7 @@ export interface CreateEvaluationInput {
   formTemplateId: string;
   answers: ItemEvaluationInput[];
   generalFeedback?: string;
+  transcricao?: string;
 }
 
 export interface EvaluationItemSnapshot {

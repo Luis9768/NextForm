@@ -46,6 +46,19 @@ public class DirectusEvaluationSyncService {
     public static final String COL_RETENCAO = "Monitoria_Retencao";
     public static final String COL_AQUISICAO = "Monitoria_Tim_Aquisicao";
 
+    private static final java.util.regex.Pattern TRANSCRIPT_TIME_PATTERN =
+            java.util.regex.Pattern.compile("\\[(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\]");
+
+    private static final java.util.regex.Pattern ANALYST_INTRO_PATTERN =
+            java.util.regex.Pattern.compile("(?:Meu nome é|Me chamo)\\s+([A-ZÀ-Úa-zà-ú]+(?:\\s+[A-ZÀ-Úa-zà-ú]+)?)", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    private static final Set<String> HEAVY_METADATA_EXCLUDED_KEYS = Set.of(
+            "Transcricao", "transcricao", "user_created", "user_updated",
+            "Operador", "ligacao", "Ligacao", "Audio_Chamada", "audio_chamada",
+            "Audio_Ligacao", "Ligacao_Retorno", "Audio_Ligacao_Retorno", "audio_chamada_retorno",
+            "Observacoes", "Breve_resumo_do_atendimento", "Pontos_fortes", "Melhorias", "Motivo_falta_grave"
+    );
+
     private final EvaluationRepository evaluationRepository;
     private final CallRecordRepository callRecordRepository;
     private final EvaluationFormTemplateRepository formTemplateRepository;
@@ -75,7 +88,7 @@ public class DirectusEvaluationSyncService {
             ObjectMapper objectMapper,
             DemoAudioService demoAudioService,
             @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}") String configuredDirectusBaseUrl,
-            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String configuredDirectusToken,
+            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}}") String configuredDirectusToken,
             @Value("${app.security.bootstrap-admin.email:}") String bootstrapAdminEmail
     ) {
         this.evaluationRepository = evaluationRepository;
@@ -94,28 +107,51 @@ public class DirectusEvaluationSyncService {
         this.bootstrapAdminEmail = bootstrapAdminEmail;
     }
 
+    private boolean isCorruptedNov5CallRecord(CallRecord cr) {
+        if (cr == null) return false;
+        String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
+        String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
+        String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null ? cr.getCustomer().getName() : "";
+        return callDateStr.startsWith("2026-11-05T18:")
+                || callDateStr.startsWith("2026-11-05T19:")
+                || "Undefined".equalsIgnoreCase(custName)
+                || audioUrl.contains(".wav?duration=")
+                || audioUrl.contains("sem-audio-");
+    }
+
+    private Map<String, Object> extractSlimAiEvaluationCriteria(Map<String, Object> item) {
+        if (item == null || item.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> slim = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : item.entrySet()) {
+            String k = entry.getKey();
+            Object v = entry.getValue();
+            if (k == null || v == null || HEAVY_METADATA_EXCLUDED_KEYS.contains(k)) {
+                continue;
+            }
+            if (v instanceof Boolean || v instanceof Number || (v instanceof String s && s.length() <= 160)) {
+                slim.put(k, v);
+            }
+        }
+        return slim;
+    }
+
     /**
-     * Repara imediatamente no banco local todas as ligações com duração legada 210s (03:30)
-     * e remove registros corrompidos de 05/11 (15:10 e 16:27), sem depender de chamada externa.
+     * Repara imediatamente no banco local todas as ligações com duração legada 210s (03:30),
+     * compacta metadata_json duplicado e remove registros corrompidos de 05/11 (15:10 e 16:27).
      */
     @Transactional
     @CacheEvict(
             value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
             allEntries = true
     )
+    @SuppressWarnings("unchecked")
     public void repairLocalDatabaseRecords() {
-        List<Evaluation> allEvals = evaluationRepository.findAll();
+        List<Evaluation> allEvals = evaluationRepository.findAllSummaryByOrderByEvaluatedAtDesc();
         for (Evaluation ev : allEvals) {
             CallRecord cr = ev.getCallRecord();
-            if (cr == null) continue;
-            String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
-            String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
-            String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null ? cr.getCustomer().getName() : "";
-            if (callDateStr.startsWith("2026-11-05T18:")
-                    || callDateStr.startsWith("2026-11-05T19:")
-                    || "Undefined".equalsIgnoreCase(custName)
-                    || audioUrl.contains(".wav?duration=")
-                    || audioUrl.contains("sem-audio-")) {
+            if (isCorruptedNov5CallRecord(cr)) {
                 cr.setEvaluation(null);
                 callRecordRepository.save(cr);
                 evaluationRepository.delete(ev);
@@ -123,43 +159,53 @@ public class DirectusEvaluationSyncService {
         }
         evaluationRepository.flush();
 
-        List<CallRecord> allCalls = callRecordRepository.findAll();
+        List<CallRecord> allCalls = callRecordRepository.findAllByOrderByCallDateDesc();
         for (CallRecord cr : allCalls) {
-            String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
-            String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
-            String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null ? cr.getCustomer().getName() : "";
-            if (callDateStr.startsWith("2026-11-05T18:")
-                    || callDateStr.startsWith("2026-11-05T19:")
-                    || "Undefined".equalsIgnoreCase(custName)
-                    || audioUrl.contains(".wav?duration=")
-                    || audioUrl.contains("sem-audio-")) {
+            if (isCorruptedNov5CallRecord(cr)) {
                 callRecordRepository.delete(cr);
                 continue;
             }
 
+            boolean modified = false;
+            Map<String, Object> meta = cr.getMetadata();
+
             if (cr.getDurationSeconds() == null || cr.getDurationSeconds() == 210) {
-                Map<String, Object> meta = cr.getMetadata();
                 int newDuration = extractCallDurationSeconds(meta != null ? meta : Map.of(), cr.getExternalCallId());
                 if (newDuration != 210) {
                     cr.setDurationSeconds(newDuration);
-                    callRecordRepository.save(cr);
+                    modified = true;
                 }
+            }
+
+            if (meta != null && meta.get("aiEvaluationData") instanceof Map<?, ?> aiMap) {
+                if (aiMap.containsKey("Transcricao") || aiMap.containsKey("transcricao") || aiMap.containsKey("user_created")) {
+                    Map<String, Object> updatedMeta = new LinkedHashMap<>(meta);
+                    updatedMeta.put("aiEvaluationData", extractSlimAiEvaluationCriteria((Map<String, Object>) aiMap));
+                    cr.setMetadata(updatedMeta);
+                    modified = true;
+                }
+            }
+
+            if (modified) {
+                callRecordRepository.save(cr);
             }
         }
         callRecordRepository.flush();
     }
 
     /**
-     * Faz o download físico de todas as gravações de áudio disponíveis no Directus para o volume persistente
+     * Faz o download físico das gravações de áudio recentes disponíveis no Directus para o volume persistente
      * local (/app/data/uploads) e para o Cloudflare R2 (quando configurado).
      */
     public Map<String, Object> backupAllDirectusAudios() {
-        List<CallRecord> allCalls = callRecordRepository.findAllByOrderByCallDateDesc();
+        List<CallRecord> recentCalls = callRecordRepository.findAllByOrderByCallDateDesc().stream()
+                .limit(12)
+                .toList();
         int totalChecked = 0;
         int backedUpCount = 0;
         int unavailableOnOriginCount = 0;
 
-        for (CallRecord call : allCalls) {
+        for (CallRecord call : recentCalls) {
             String url = call.getAudioUrl();
             if (url != null && url.contains("/api/v1/audio/directus/")) {
                 totalChecked++;
@@ -352,7 +398,8 @@ public class DirectusEvaluationSyncService {
                 "call_980101", "call_980102", "call_980103", "call_980104", "call_980105", "call_980106"
         );
 
-        List<Evaluation> allEvals = evaluationRepository.findAll();
+        List<Evaluation> allEvals = evaluationRepository.findAllSummaryByOrderByEvaluatedAtDesc();
+        List<User> cachedUsers = new ArrayList<>(userRepository.findAll());
         User fallbackRealAnalyst = userRepository.findByEmailIgnoreCase("bruna.neves@headsetbrasil.com")
                 .or(() -> userRepository.findByEmailIgnoreCase("estefany.trindade@headsetbrasil.com"))
                 .orElse(primaryAdmin);
@@ -360,20 +407,10 @@ public class DirectusEvaluationSyncService {
         for (Evaluation ev : allEvals) {
             CallRecord cr = ev.getCallRecord();
             String extId = cr != null ? cr.getExternalCallId() : "";
-            String audioUrl = cr != null && cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
-            String callDateStr = cr != null && cr.getCallDate() != null ? cr.getCallDate().toString() : "";
-            String custName = cr != null && cr.getCustomer() != null && cr.getCustomer().getName() != null
-                    ? cr.getCustomer().getName()
-                    : "";
             String analystEmail = ev.getAnalyst() != null && ev.getAnalyst().getEmail() != null
                     ? ev.getAnalyst().getEmail().toLowerCase()
                     : "";
-            boolean isCorruptedNov5Batch = callDateStr.startsWith("2026-11-05T18:")
-                    || callDateStr.startsWith("2026-11-05T19:")
-                    || "Undefined".equalsIgnoreCase(custName)
-                    || audioUrl.contains(".wav?duration=")
-                    || audioUrl.contains("sem-audio-");
-            boolean isFictionalDemoEval = isCorruptedNov5Batch
+            boolean isFictionalDemoEval = isCorruptedNov5CallRecord(cr)
                     || (extId != null && legacyDemoCallIds.contains(extId))
                     || (analystEmail.endsWith("@empresa.com") && (extId == null || !extId.startsWith("directus_")));
 
@@ -387,7 +424,7 @@ public class DirectusEvaluationSyncService {
             } else {
                 boolean changed = false;
                 if (ev.getAnalyst() != null && (analystEmail.endsWith("@empresa.com") || analystEmail.endsWith("@directus.empresa.com"))) {
-                    User matched = findBestMatchingDirectusUser(ev.getAnalyst().getName(), validDirectusEmails, fallbackRealAnalyst);
+                    User matched = findBestMatchingDirectusUser(ev.getAnalyst().getName(), validDirectusEmails, fallbackRealAnalyst, cachedUsers);
                     ev.setAnalyst(matched);
                     if (cr != null) {
                         cr.setAnalyst(matched);
@@ -409,23 +446,13 @@ public class DirectusEvaluationSyncService {
         }
         evaluationRepository.flush();
 
-        List<CallRecord> allCalls = callRecordRepository.findAll();
+        List<CallRecord> allCalls = callRecordRepository.findAllByOrderByCallDateDesc();
         for (CallRecord cr : allCalls) {
             String extId = cr.getExternalCallId();
-            String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
-            String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
-            String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null
-                    ? cr.getCustomer().getName()
-                    : "";
             String analystEmail = cr.getAnalyst() != null && cr.getAnalyst().getEmail() != null
                     ? cr.getAnalyst().getEmail().toLowerCase()
                     : "";
-            boolean isCorruptedNov5Call = callDateStr.startsWith("2026-11-05T18:")
-                    || callDateStr.startsWith("2026-11-05T19:")
-                    || "Undefined".equalsIgnoreCase(custName)
-                    || audioUrl.contains(".wav?duration=")
-                    || audioUrl.contains("sem-audio-");
-            boolean isFictionalDemoCall = isCorruptedNov5Call
+            boolean isFictionalDemoCall = isCorruptedNov5CallRecord(cr)
                     || (extId != null && legacyDemoCallIds.contains(extId))
                     || (cr.getEvaluation() == null && analystEmail.endsWith("@empresa.com"));
 
@@ -433,7 +460,7 @@ public class DirectusEvaluationSyncService {
                 callRecordRepository.delete(cr);
                 purgedCalls++;
             } else if (cr.getAnalyst() != null && (analystEmail.endsWith("@empresa.com") || analystEmail.endsWith("@directus.empresa.com"))) {
-                User matched = findBestMatchingDirectusUser(cr.getAnalyst().getName(), validDirectusEmails, fallbackRealAnalyst);
+                User matched = findBestMatchingDirectusUser(cr.getAnalyst().getName(), validDirectusEmails, fallbackRealAnalyst, cachedUsers);
                 cr.setAnalyst(matched);
                 callRecordRepository.save(cr);
             }
@@ -752,6 +779,7 @@ public class DirectusEvaluationSyncService {
     ) {
         User fallbackEvaluator = resolveDefaultEvaluator();
         Map<String, EvaluationFormTemplate> templatesByCollection = loadTemplatesByCollection();
+        List<User> cachedUsers = new ArrayList<>(userRepository.findAll());
 
         Set<String> processedCollections = new LinkedHashSet<>();
         Set<String> provisionedAnalysts = new LinkedHashSet<>();
@@ -858,6 +886,8 @@ public class DirectusEvaluationSyncService {
                 if (transcricao != null) {
                     metadata.put("transcricao", transcricao);
                 }
+                metadata.put("aiEvaluationData", extractSlimAiEvaluationCriteria(item));
+                metadata.put("aiWebhookStatus", "COMPLETED");
 
                 User evaluator = resolveOrProvisionEvaluator(item.get("user_created"), targetSector, fallbackEvaluator);
                 User analyst = resolveOrProvisionAnalyst(
@@ -865,7 +895,8 @@ public class DirectusEvaluationSyncService {
                         transcricao,
                         targetSector,
                         evaluator,
-                        provisionedAnalysts
+                        provisionedAnalysts,
+                        cachedUsers
                 );
 
                 if (existingCallOpt.isPresent()) {
@@ -1272,7 +1303,12 @@ public class DirectusEvaluationSyncService {
                 .replaceAll("[ç]", "c");
     }
 
-    private User findBestMatchingDirectusUser(String targetName, Set<String> validDirectusEmails, User fallback) {
+    private User findBestMatchingDirectusUser(
+            String targetName,
+            Set<String> validDirectusEmails,
+            User fallback,
+            List<User> cachedUsers
+    ) {
         if (targetName == null || targetName.isBlank()) {
             return fallback;
         }
@@ -1281,7 +1317,7 @@ public class DirectusEvaluationSyncService {
         String firstToken = tokens.length > 0 ? tokens[0] : cleanTarget;
         String lastToken = tokens.length > 1 ? tokens[tokens.length - 1] : firstToken;
 
-        for (User u : userRepository.findAll()) {
+        for (User u : cachedUsers) {
             if (!validDirectusEmails.contains(u.getEmail().toLowerCase())) {
                 continue;
             }
@@ -1481,7 +1517,8 @@ public class DirectusEvaluationSyncService {
             String transcricao,
             String sectorName,
             User defaultManager,
-            Set<String> provisionedAnalysts
+            Set<String> provisionedAnalysts,
+            List<User> cachedUsers
     ) {
         String displayName = null;
         String email = null;
@@ -1501,9 +1538,10 @@ public class DirectusEvaluationSyncService {
             } else if (trimmed.length() == 36 && trimmed.contains("-")) {
                 try {
                     UUID opUuid = UUID.fromString(trimmed);
-                    Optional<User> existingByUuid = userRepository.findById(opUuid);
-                    if (existingByUuid.isPresent()) {
-                        return existingByUuid.get();
+                    for (User u : cachedUsers) {
+                        if (opUuid.equals(u.getId())) {
+                            return u;
+                        }
                     }
                 } catch (Exception ignored) {
                 }
@@ -1513,9 +1551,7 @@ public class DirectusEvaluationSyncService {
         }
 
         if ((displayName == null || displayName.isBlank()) && transcricao != null && !transcricao.isBlank()) {
-            java.util.regex.Matcher mFull = java.util.regex.Pattern
-                    .compile("(?:Meu nome é|Me chamo)\\s+([A-ZÀ-Úa-zà-ú]+(?:\\s+[A-ZÀ-Úa-zà-ú]+)?)", java.util.regex.Pattern.CASE_INSENSITIVE)
-                    .matcher(transcricao);
+            java.util.regex.Matcher mFull = ANALYST_INTRO_PATTERN.matcher(transcricao);
             while (mFull.find()) {
                 String candidate = mFull.group(1).trim();
                 if (!candidate.toLowerCase().endsWith("falo") && !candidate.toLowerCase().endsWith("eu")) {
@@ -1532,9 +1568,10 @@ public class DirectusEvaluationSyncService {
 
         if (email != null && !email.isBlank()) {
             String cleanEmail = stripAccents(email.toLowerCase());
-            Optional<User> byEmail = userRepository.findByEmailIgnoreCase(cleanEmail);
-            if (byEmail.isPresent()) {
-                return byEmail.get();
+            for (User u : cachedUsers) {
+                if (u.getEmail().equalsIgnoreCase(cleanEmail)) {
+                    return u;
+                }
             }
         }
 
@@ -1543,7 +1580,7 @@ public class DirectusEvaluationSyncService {
             String[] tokens = cleanTarget.split("\\s+");
             String first = tokens[0];
             String last = tokens[tokens.length - 1];
-            for (User u : userRepository.findAll()) {
+            for (User u : cachedUsers) {
                 if (u.getRole() != Role.ROLE_ANALISTA) continue;
                 String uName = stripAccents(u.getName().toLowerCase());
                 if (uName.equals(cleanTarget)
@@ -1568,6 +1605,12 @@ public class DirectusEvaluationSyncService {
         final String finalEmail = stripAccents(email.toLowerCase());
         final String finalName = displayName;
 
+        for (User u : cachedUsers) {
+            if (u.getEmail().equalsIgnoreCase(finalEmail)) {
+                return u;
+            }
+        }
+
         return userRepository.findByEmailIgnoreCase(finalEmail)
                 .orElseGet(() -> {
                     User created = userRepository.save(User.builder()
@@ -1581,6 +1624,7 @@ public class DirectusEvaluationSyncService {
                             .active(true)
                             .mustChangePassword(true)
                             .build());
+                    cachedUsers.add(created);
                     provisionedAnalysts.add(finalName + " <" + finalEmail + "> (" + sectorName + ")");
                     return created;
                 });
@@ -1928,9 +1972,7 @@ public class DirectusEvaluationSyncService {
                 extractString(item, "transcricao", null)
         );
         if (transcricao != null && !transcricao.isBlank()) {
-            java.util.regex.Matcher mTime = java.util.regex.Pattern
-                    .compile("\\[(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\]")
-                    .matcher(transcricao);
+            java.util.regex.Matcher mTime = TRANSCRIPT_TIME_PATTERN.matcher(transcricao);
             int maxTimestampSecs = 0;
             while (mTime.find()) {
                 try {

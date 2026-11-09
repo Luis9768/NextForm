@@ -62,6 +62,62 @@ const AVAILABLE_SECTORS = ["SAC", "Cobrança & Retenção", "Aquisição"] as co
 const DIRECTUS_WEBHOOK_URL =
   process.env.NEXT_PUBLIC_CUSTOMER_WEBHOOK_URL || "";
 
+const AUDIO_EVALUATION_WEBHOOK_URL =
+  process.env.NEXT_PUBLIC_AUDIO_EVALUATION_WEBHOOK_URL ||
+  "https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7";
+
+function unwrapWebhookDataObject(
+  raw: unknown
+): Record<string, unknown> | null {
+  if (!raw) return null;
+  if (Array.isArray(raw)) {
+    return raw.length > 0 ? unwrapWebhookDataObject(raw[0]) : null;
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (obj.data && typeof obj.data === "object") {
+      return unwrapWebhookDataObject(obj.data);
+    }
+    return obj;
+  }
+  return null;
+}
+
+function parseCriterionBooleanValue(
+  rawVal: unknown,
+  isFatalError: boolean
+): boolean | null {
+  if (rawVal === undefined || rawVal === null) return null;
+  if (typeof rawVal === "boolean") return rawVal;
+  if (typeof rawVal === "number") return rawVal > 0;
+  if (typeof rawVal === "string") {
+    const clean = rawVal.trim().toLowerCase();
+    if (!clean || clean === "undefined" || clean === "null") return null;
+    if (
+      clean === "true" ||
+      clean === "sim" ||
+      clean === "conforme" ||
+      clean === "yes"
+    ) {
+      return true;
+    }
+    if (
+      clean === "false" ||
+      clean === "nao" ||
+      clean === "não" ||
+      clean === "n/a" ||
+      clean === "0"
+    ) {
+      return false;
+    }
+    const num = Number(clean);
+    if (!Number.isNaN(num)) {
+      return isFatalError ? num > 0 : num > 0;
+    }
+  }
+  return null;
+}
+
 interface CallRecordingSlot {
   id: string;
   file: File | null;
@@ -185,6 +241,11 @@ function AnalystEvaluationFlowInner() {
   const [pontosFortes, setPontosFortes] = useState("");
   const [melhorias, setMelhorias] = useState("");
   const [motivoFaltaGrave, setMotivoFaltaGrave] = useState("N/A");
+  const [transcricaoInput, setTranscricaoInput] = useState("");
+  const [aiSyncStatus, setAiSyncStatus] = useState<
+    "IDLE" | "PROCESSING" | "COMPLETED" | "ERROR"
+  >("IDLE");
+  const [aiWebhookError, setAiWebhookError] = useState<string | null>(null);
   const [expandedNoteItemId, setExpandedNoteItemId] = useState<string | null>(
     null
   );
@@ -247,7 +308,161 @@ function AnalystEvaluationFlowInner() {
     return resolveTemplateForSector(analystSector, existingTemplates);
   }, [existingTemplates, selectedTemplateId, analystSector]);
 
-  // Determina se a avaliação atual exige os campos de SAC / Retenção (pelo setor do analista ou formulário selecionado)
+  const applyAiEvaluationPayload = useCallback(
+    (rawPayload: unknown, targetForm: FormTemplate | null) => {
+      const dataMap = unwrapWebhookDataObject(rawPayload);
+      if (!dataMap) return false;
+
+      let appliedAny = false;
+
+      const rawTranscricao =
+        (typeof dataMap.Transcricao === "string" && dataMap.Transcricao) ||
+        (typeof dataMap.transcricao === "string" && dataMap.transcricao) ||
+        "";
+      if (rawTranscricao.trim()) {
+        setTranscricaoInput(
+          rawTranscricao
+            .replace(/^```\n?/, "")
+            .replace(/\n?```$/, "")
+            .trim()
+        );
+        appliedAny = true;
+      }
+
+      const rawObs =
+        (typeof dataMap.Observacoes === "string" && dataMap.Observacoes) ||
+        (typeof dataMap.Breve_resumo_do_atendimento === "string" &&
+          dataMap.Breve_resumo_do_atendimento) ||
+        "";
+      if (rawObs.trim()) {
+        setGeneralFeedback(rawObs.trim());
+        appliedAny = true;
+      }
+
+      if (typeof dataMap.Pontos_fortes === "string" && dataMap.Pontos_fortes) {
+        setPontosFortes(dataMap.Pontos_fortes.trim());
+      }
+      if (typeof dataMap.Melhorias === "string" && dataMap.Melhorias) {
+        setMelhorias(dataMap.Melhorias.trim());
+      }
+      if (
+        typeof dataMap.Motivo_falta_grave === "string" &&
+        dataMap.Motivo_falta_grave
+      ) {
+        setMotivoFaltaGrave(dataMap.Motivo_falta_grave.trim());
+      }
+
+      if (targetForm && targetForm.items.length > 0) {
+        const nextChecked: Record<string, boolean> = {};
+        let matchedCriteriaCount = 0;
+
+        targetForm.items.forEach((item) => {
+          const bulletIdx = item.label.indexOf("•");
+          const criterionKey =
+            bulletIdx > 0
+              ? item.label.substring(0, bulletIdx).trim()
+              : item.label.trim();
+
+          let rawCriterionVal = dataMap[criterionKey];
+          if (
+            rawCriterionVal === undefined &&
+            criterionKey === "Faz_questionamentos_direcionados"
+          ) {
+            rawCriterionVal = dataMap["Questionamentos_direcionados"];
+          }
+          if (rawCriterionVal === undefined && item.fatalError) {
+            rawCriterionVal =
+              dataMap["Falta_Grave"] !== undefined
+                ? dataMap["Falta_Grave"]
+                : dataMap["falta_grave"];
+          }
+
+          const parsedBool = parseCriterionBooleanValue(
+            rawCriterionVal,
+            item.fatalError
+          );
+          if (parsedBool !== null) {
+            nextChecked[item.id] = parsedBool;
+            matchedCriteriaCount++;
+          } else {
+            nextChecked[item.id] = !item.fatalError;
+          }
+        });
+
+        if (matchedCriteriaCount > 0) {
+          setCheckedMap(nextChecked);
+          appliedAny = true;
+        }
+      }
+
+      if (appliedAny) {
+        setAiSyncStatus("COMPLETED");
+      }
+      return appliedAny;
+    },
+    []
+  );
+
+  // Polling automático na Etapa 3 enquanto aguarda retorno da transcrição e respostas (true/false) do webhook n8n
+  useEffect(() => {
+    if (
+      step !== 3 ||
+      !selectedCall?.id ||
+      aiSyncStatus === "COMPLETED" ||
+      aiSyncStatus === "ERROR"
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const checkCallMetadata = async () => {
+      try {
+        const latestCall = await callsApi.getById(selectedCall.id);
+        if (cancelled) return;
+        const meta = latestCall.metadata || {};
+        if (typeof meta.transcricao === "string" && meta.transcricao.trim()) {
+          setTranscricaoInput(
+            meta.transcricao
+              .replace(/^```\n?/, "")
+              .replace(/\n?```$/, "")
+              .trim()
+          );
+        }
+        if (meta.aiEvaluationData) {
+          setAiWebhookError(null);
+          applyAiEvaluationPayload(meta.aiEvaluationData, activeFormForCall);
+        } else if (
+          typeof meta.transcricao === "string" &&
+          meta.transcricao.trim()
+        ) {
+          setAiWebhookError(null);
+          setAiSyncStatus("COMPLETED");
+        } else if (meta.aiWebhookStatus === "ERROR") {
+          setAiSyncStatus("ERROR");
+          setAiWebhookError(
+            typeof meta.aiWebhookError === "string"
+              ? meta.aiWebhookError
+              : "O webhook n8n retornou erro ou está inativo."
+          );
+        }
+      } catch {
+        // Ignora falhas transitórias de rede durante polling
+      }
+    };
+
+    checkCallMetadata();
+    const interval = setInterval(checkCallMetadata, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [
+    step,
+    selectedCall?.id,
+    aiSyncStatus,
+    activeFormForCall,
+    applyAiEvaluationPayload,
+  ]);
   const isSacOrRetencao = useMemo(() => {
     const formContext = `${activeFormForCall?.sector || ""} ${
       activeFormForCall?.name || ""
@@ -599,12 +814,48 @@ function AnalystEvaluationFlowInner() {
         attendanceDate: isSacOrRetencao ? dataAtendimentoInput : undefined,
         monitoringDate: isSacOrRetencao ? dataMonitoriaInput : undefined,
         sector: analystSector,
+        formTemplateId: activeFormForCall?.id,
       });
     },
     onSuccess: (createdCall) => {
       setSelectedCall(createdCall);
+      setAiSyncStatus("PROCESSING");
       queryClient.invalidateQueries({ queryKey: ["calls-list"] });
       setStep(3);
+
+      // Caso o servidor já tenha retornado metadados de IA ou para disparar direto ao webhook configurado
+      const meta = createdCall.metadata || {};
+      if (meta.aiEvaluationData) {
+        applyAiEvaluationPayload(meta.aiEvaluationData, activeFormForCall);
+      } else if (AUDIO_EVALUATION_WEBHOOK_URL) {
+        fetch(AUDIO_EVALUATION_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: createdCall.id,
+            id_formullario: createdCall.id,
+            formTemplateId: activeFormForCall?.id || "",
+            externalCallId: createdCall.externalCallId,
+            ligacao: createdCall.audioUrl,
+            audioUrl: createdCall.audioUrl,
+            telefone: createdCall.customerIdentifier,
+            Telefone_Portabilidade: createdCall.customerIdentifier,
+            Operador: analystId,
+            Nome: customerNameInput,
+            CPF: customerCpfInput,
+            Proposta: proposalInput,
+            Data_da_venda: saleDateInput,
+          }),
+        })
+          .then(async (r) => {
+            if (!r.ok) return;
+            const json = await r.json();
+            applyAiEvaluationPayload(json, activeFormForCall);
+          })
+          .catch(() => {
+            // O backend já faz o disparo assíncrono e o polling busca o resultado
+          });
+      }
     },
     onError: (err) => {
       setFlowError(extractErrorMessage(err));
@@ -677,6 +928,7 @@ function AnalystEvaluationFlowInner() {
         formTemplateId: activeFormForCall.id,
         answers,
         generalFeedback: parts.join("\n\n") || undefined,
+        transcricao: transcricaoInput.trim() || undefined,
       });
     },
     onSuccess: (createdEval) => {
@@ -1570,7 +1822,7 @@ function AnalystEvaluationFlowInner() {
                     </div>
                   </div>
 
-                  {/* Renderiza um Player para cada ligação anexada na avaliação */}
+                  {/* Renderiza um Player para cada ligação anexada na avaliação (Funcionalidade de escutar áudio preservada) */}
                   <div className="space-y-2.5">
                     {recordings.map((slot, idx) => (
                       <CallAudioPlayer
@@ -1585,6 +1837,64 @@ function AnalystEvaluationFlowInner() {
                       />
                     ))}
                   </div>
+                </div>
+
+                {/* Campo de Transcrição da Ligação (Recebida do Webhook n8n / Editável) */}
+                <div className="p-4 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono uppercase tracking-wider font-semibold text-zinc-200">
+                        Transcrição da Ligação (Transcricao)
+                      </span>
+                      {aiSyncStatus === "PROCESSING" && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-zinc-900 border border-zinc-700 text-[11px] font-mono text-zinc-300">
+                          <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
+                          <span>
+                            Processando transcrição e respostas via webhook...
+                          </span>
+                        </span>
+                      )}
+                      {aiSyncStatus === "COMPLETED" && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
+                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                          <span>
+                            Transcrição e respostas preenchidas automaticamente
+                          </span>
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!selectedCall?.id) return;
+                        setAiWebhookError(null);
+                        setAiSyncStatus("PROCESSING");
+                        await callsApi
+                          .retryAudioWebhook(selectedCall.id)
+                          .catch(() => {});
+                      }}
+                      className="h-7 px-2.5 rounded-md border border-zinc-800 bg-[#121215] hover:bg-zinc-800 text-[11px] font-mono text-zinc-300 inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      <span>Reenviar / Sincronizar Webhook</span>
+                    </button>
+                  </div>
+
+                  {aiWebhookError && (
+                    <div className="p-3 rounded-lg border border-amber-800/70 bg-amber-950/35 text-xs text-amber-200 flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                      <span>{aiWebhookError}</span>
+                    </div>
+                  )}
+
+                  <textarea
+                    rows={7}
+                    value={transcricaoInput}
+                    onChange={(e) => setTranscricaoInput(e.target.value)}
+                    placeholder="A transcrição gerada pelo webhook aparecerá automaticamente aqui (ex: [00:02] Atendente: Alô, boa tarde...). Você também pode colar ou editar o texto."
+                    className="w-full p-3.5 rounded-xl border border-zinc-800 bg-[#121215] text-xs font-mono leading-relaxed text-zinc-100 focus:outline-none focus:border-zinc-600"
+                  />
                 </div>
 
                 {/* Grid Principal: Critérios à Esquerda + Resumo Nota_Final à Direita */}

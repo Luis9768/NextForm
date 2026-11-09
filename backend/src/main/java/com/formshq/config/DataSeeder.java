@@ -81,27 +81,35 @@ public class DataSeeder implements CommandLineRunner {
                     log.warn("Aviso no reparo local de registros: {}", e.getMessage());
                 }
 
-                try {
-                    var userResult = directusEvaluationSyncService.syncUsersAndPurgeFictionalData(null, null);
-                    log.info("Sincronização inicial de Usuários Directus concluída: {} usuários reais ativos, {} fictícios removidos.",
-                            userResult.syncedUsersCount(), userResult.purgedFictionalUsers());
-                } catch (Exception e) {
-                    log.warn("Aviso ao sincronizar usuários do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
+                long currentCallsCount = callRecordRepository.count();
+                boolean alreadyMigrated = currentCallsCount >= 500;
+
+                if (!alreadyMigrated) {
+                    try {
+                        var userResult = directusEvaluationSyncService.syncUsersAndPurgeFictionalData(null, null);
+                        log.info("Sincronização inicial de Usuários Directus concluída: {} usuários reais ativos, {} fictícios removidos.",
+                                userResult.syncedUsersCount(), userResult.purgedFictionalUsers());
+                    } catch (Exception e) {
+                        log.warn("Aviso ao sincronizar usuários do Directus no boot: {}", e.getMessage());
+                    }
                 }
 
                 try {
+                    int effectiveBootLimit = alreadyMigrated ? 15 : directusInitialEvalLimit;
                     var evalResult = directusEvaluationSyncService.pullFromDirectusApi(
-                            new com.formshq.dto.directus.DirectusPullRequest(null, null, "ALL", directusInitialEvalLimit)
+                            new com.formshq.dto.directus.DirectusPullRequest(null, null, "ALL", effectiveBootLimit)
                     );
-                    log.info("Sincronização inicial de Avaliações Directus concluída: {} avaliações importadas, {} atualizadas/ignoradas.",
-                            evalResult.importedCount(), evalResult.skippedDuplicates());
+                    log.info("Sincronização de Avaliações Directus no boot concluída (modo={}): {} avaliações importadas/atualizadas, {} ignoradas.",
+                            alreadyMigrated ? "incremental-15" : "completo",
+                            evalResult.importedCount(),
+                            evalResult.skippedDuplicates());
                 } catch (Exception e) {
-                    log.warn("Aviso ao sincronizar avaliações do Directus no boot (verifique DIRECTUS_BASE_URL e DIRECTUS_API_TOKEN no .env): {}", e.getMessage());
+                    log.warn("Aviso ao sincronizar avaliações do Directus no boot: {}", e.getMessage());
                 }
 
                 try {
                     var audioBackup = directusEvaluationSyncService.backupAllDirectusAudios();
-                    log.info("Backup físico de áudios do Directus concluído: {}", audioBackup);
+                    log.info("Backup físico de áudios recentes do Directus concluído: {}", audioBackup);
                 } catch (Exception e) {
                     log.warn("Aviso ao fazer backup físico dos áudios do Directus: {}", e.getMessage());
                 }

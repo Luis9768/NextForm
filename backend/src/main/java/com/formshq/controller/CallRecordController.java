@@ -49,8 +49,8 @@ public class CallRecordController {
     @PreAuthorize("hasAuthority('ROLE_GESTOR')")
     @Operation(summary = "Anexa um ou mais arquivos de áudio de ligações baixadas pela gestora e vincula à analista e cliente/ticket")
     public ResponseEntity<CallRecordResponse> uploadCallRecording(
-            @RequestPart(value = "file", required = false) MultipartFile file,
-            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestParam(value = "file", required = false) MultipartFile file,
+            @RequestParam(value = "files", required = false) List<MultipartFile> files,
             @RequestParam("analystId") UUID analystId,
             @RequestParam("customerPhone") String customerPhone,
             @RequestParam(value = "customerName", required = false) String customerName,
@@ -60,7 +60,8 @@ public class CallRecordController {
             @RequestParam(value = "ticket", required = false) String ticket,
             @RequestParam(value = "attendanceDate", required = false) String attendanceDate,
             @RequestParam(value = "monitoringDate", required = false) String monitoringDate,
-            @RequestParam(value = "sector", required = false) String sector
+            @RequestParam(value = "sector", required = false) String sector,
+            @RequestParam(value = "formTemplateId", required = false) String formTemplateId
     ) {
         CallRecordResponse created = callRecordService.uploadCallWithAudioFiles(
                 file,
@@ -74,9 +75,20 @@ public class CallRecordController {
                 ticket,
                 attendanceDate,
                 monitoringDate,
-                sector
+                sector,
+                formTemplateId
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    @PostMapping("/{id}/retry-webhook")
+    @PreAuthorize("hasAuthority('ROLE_GESTOR')")
+    @Operation(summary = "Reenvia o disparo do webhook n8n de transcrição e pré-avaliação para uma ligação")
+    public ResponseEntity<CallRecordResponse> retryAudioWebhook(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal currentUser
+    ) {
+        return ResponseEntity.ok(callRecordService.retryAudioEvaluationWebhook(id, currentUser));
     }
 
     @PatchMapping("/by-external/{externalCallId}/duration")

@@ -35,7 +35,7 @@ public class DemoAudioService {
 
     public DemoAudioService(
             @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:https://crm-directus.xjbony.easypanel.host}}") String directusBaseUrl,
-            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String directusApiToken,
+            @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:te8QLcx3O7sSzqQGT60NFDLRmStiJGCy}}") String directusApiToken,
             R2ObjectStorageService r2ObjectStorageService
     ) {
         this.directusBaseUrl = directusBaseUrl;

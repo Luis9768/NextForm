@@ -76,6 +76,7 @@ public class Evaluation {
 
     @OneToMany(mappedBy = "evaluation", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("displayOrder ASC")
+    @org.hibernate.annotations.BatchSize(size = 100)
     @Builder.Default
     private List<EvaluationItemSnapshot> itemSnapshots = new ArrayList<>();
 
