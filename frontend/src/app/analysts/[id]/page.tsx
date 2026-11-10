@@ -66,7 +66,7 @@ import {
 } from "@/lib/utils";
 import { CallRecord, CustomerInfo, FormTemplate } from "@/types";
 
-type FlowStep = 1 | 2 | 3;
+type FlowStep = 1 | 2;
 
 const AVAILABLE_SECTORS = ["SAC", "Cobrança & Retenção", "Aquisição"] as const;
 
@@ -563,9 +563,9 @@ function AnalystEvaluationFlowInner() {
     [studioCurrentTime, seekStudioAudioTo]
   );
 
-  // Atalhos de Teclado Ergonômicos na Etapa 3 (Espaço = Play/Pause, Setas = ±5s)
+  // Atalhos de Teclado Ergonômicos na Etapa 2 (Espaço = Play/Pause, Setas = ±5s)
   useEffect(() => {
-    if (step !== 3) return;
+    if (step !== 2) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
       if (
@@ -929,11 +929,11 @@ function AnalystEvaluationFlowInner() {
     []
   );
 
-  // Polling automático na Etapa 3 enquanto aguarda retorno da transcrição completa e respostas (true/false) do webhook n8n
+  // Polling automático na Etapa 2 enquanto aguarda retorno da transcrição completa e dados do webhook n8n
   useEffect(() => {
-    const hasFullTranscript = transcricaoInput.trim().length >= 600;
+    const hasFullTranscript = transcricaoInput.trim().length >= 100;
     if (
-      step !== 3 ||
+      step !== 2 ||
       !selectedCall?.id ||
       (aiSyncStatus === "COMPLETED" && hasFullTranscript) ||
       aiSyncStatus === "ERROR"
@@ -1218,7 +1218,7 @@ function AnalystEvaluationFlowInner() {
         setFlowError("Informe a Data da Monitoria.");
         return;
       }
-      setStep(2);
+      uploadAttachmentMutation.mutate();
       return;
     }
 
@@ -1276,7 +1276,7 @@ function AnalystEvaluationFlowInner() {
         );
         setCustomerInfo(updated);
       }
-      setStep(2);
+      uploadAttachmentMutation.mutate();
     } catch (err) {
       setFlowError(extractErrorMessage(err));
     } finally {
@@ -1409,7 +1409,7 @@ function AnalystEvaluationFlowInner() {
       setAiWebhookError(null);
       setAiSyncStatus("PROCESSING");
       queryClient.invalidateQueries({ queryKey: ["calls-list"] });
-      setStep(3);
+      setStep(2);
 
       // O backend (CallRecordService) faz o upload do áudio para o Directus/R2 e dispara o webhook n8n;
       // o useEffect de polling da Etapa 3 busca o resultado completo assim que o n8n concluir.
@@ -1528,7 +1528,7 @@ function AnalystEvaluationFlowInner() {
     <AppShell>
       <div
         className={
-          step === 3
+          step === 2
             ? "h-full flex flex-col overflow-hidden bg-[#0b0b0d]"
             : "h-full overflow-y-auto p-4 sm:p-6 space-y-5 pb-12"
         }
@@ -1536,7 +1536,7 @@ function AnalystEvaluationFlowInner() {
         {/* Barra Superior Minimalista de 1 Linha (Estilo ElevenLabs Studio Header) */}
         <header
           className={
-            step === 3
+            step === 2
               ? "h-12 px-5 border-b border-zinc-800/70 bg-[#0b0b0d] flex items-center justify-between gap-4 shrink-0"
               : "flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-zinc-800/80 shrink-0"
           }
@@ -1599,9 +1599,8 @@ function AnalystEvaluationFlowInner() {
             >
               {(
                 [
-                  { num: 1, label: "1. Cliente" },
-                  { num: 2, label: `2. Áudio (${recordings.length})` },
-                  { num: 3, label: "3. Avaliar" },
+                  { num: 1, label: "1. Cliente & Áudio" },
+                  { num: 2, label: "2. Avaliar" },
                 ] as const
               ).map((s) => {
                 const active = step === s.num;
@@ -1710,244 +1709,67 @@ function AnalystEvaluationFlowInner() {
 
                   {isSacOrRetencao ? (
                     /* ==============================================================
-                       MODO SAC & RETENÇÃO: BUSCA POR TICKET (SEM #) + DADOS DO TICKET
+                       MODO SAC & RETENÇÃO: TICKET (SEM #) + DATAS
+                       (O webhook recebe o Ticket + Áudio de uma só vez, puxa os 12 dados e transcreve)
                        ============================================================== */
-                    <>
-                      <div className="space-y-2 pb-3 border-b border-zinc-800/60">
-                        <label className="block text-xs font-medium text-zinc-200">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 py-1">
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
                           Ticket (sem #) *
                         </label>
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <div className="relative flex-1">
-                            <Hash className="h-3.5 w-3.5 text-zinc-500 absolute left-3.5 top-3" />
-                            <input
-                              type="text"
-                              required
-                              value={ticketInput}
-                              onChange={(e) =>
-                                setTicketInput(
-                                  e.target.value.replace(/#/g, "").trimStart()
-                                )
-                              }
-                              placeholder="Digite o Ticket sem # (Ex: 14693287)"
-                              className="w-full h-10 pl-9 pr-4 rounded-lg border border-zinc-800 bg-[#121215] text-sm font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            disabled={lookupLoading}
-                            onClick={() =>
-                              pullTicketFromWebhook(ticketInput, true)
+                        <div className="relative">
+                          <Hash className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3" />
+                          <input
+                            type="text"
+                            required
+                            value={ticketInput}
+                            onChange={(e) =>
+                              setTicketInput(
+                                e.target.value.replace(/#/g, "").trimStart()
+                              )
                             }
-                            className="h-10 px-3.5 rounded-lg border border-zinc-800 bg-[#121215] hover:bg-zinc-900 text-xs font-medium text-zinc-200 inline-flex items-center justify-center gap-1.5 shrink-0 transition-colors"
-                          >
-                            <RefreshCw
-                              className={`h-3.5 w-3.5 ${
-                                lookupLoading ? "animate-spin" : ""
-                              }`}
-                            />
-                            <span>Puxar pelo Ticket</span>
-                          </button>
+                            placeholder="Ex: 14693287"
+                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Data do Atendimento *
-                          </label>
-                          <div className="relative">
-                            <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-2.5 pointer-events-none" />
-                            <input
-                              type="date"
-                              required
-                              value={dataAtendimentoInput}
-                              onChange={(e) =>
-                                setDataAtendimentoInput(e.target.value)
-                              }
-                              className="w-full h-9 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Data da Monitoria *
-                          </label>
-                          <div className="relative">
-                            <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-2.5 pointer-events-none" />
-                            <input
-                              type="date"
-                              required
-                              value={dataMonitoriaInput}
-                              onChange={(e) =>
-                                setDataMonitoriaInput(e.target.value)
-                              }
-                              className="w-full h-9 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Protocolo (protocolo)
-                          </label>
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
+                          Data do Atendimento *
+                        </label>
+                        <div className="relative">
+                          <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3 pointer-events-none" />
                           <input
-                            type="text"
-                            value={protocoloInput}
-                            onChange={(e) => setProtocoloInput(e.target.value)}
-                            placeholder="Ex: 41742420261028258548"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div className="sm:col-span-2">
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Nome Completo (nome_completo)
-                          </label>
-                          <input
-                            type="text"
-                            value={customerNameInput}
+                            type="date"
+                            required
+                            value={dataAtendimentoInput}
                             onChange={(e) =>
-                              setCustomerNameInput(e.target.value)
+                              setDataAtendimentoInput(e.target.value)
                             }
-                            placeholder="Ex: ROMUALDO ADRIANO SILVA"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            CPF (cpf)
-                          </label>
-                          <input
-                            type="text"
-                            value={customerCpfInput}
-                            onChange={(e) =>
-                              setCustomerCpfInput(e.target.value)
-                            }
-                            placeholder="Ex: 70711275653"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Telefone de Origem (telefone_origem)
-                          </label>
-                          <input
-                            type="text"
-                            value={telefoneOrigemInput}
-                            onChange={(e) =>
-                              setTelefoneOrigemInput(e.target.value)
-                            }
-                            placeholder="Ex: 31996529191"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Administradora (administradora)
-                          </label>
-                          <input
-                            type="text"
-                            value={administradoraInput}
-                            onChange={(e) =>
-                              setAdministradoraInput(e.target.value)
-                            }
-                            placeholder="Ex: AFFIX - BENEFICIOS"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Operadora (operadora)
-                          </label>
-                          <input
-                            type="text"
-                            value={operadoraInput}
-                            onChange={(e) => setOperadoraInput(e.target.value)}
-                            placeholder="Ex: HAPVIDA"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Situação (situacao)
-                          </label>
-                          <input
-                            type="text"
-                            value={situacaoInput}
-                            onChange={(e) => setSituacaoInput(e.target.value)}
-                            placeholder="Ex: ATIVO"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Canal de Entrada (canal_de_entrada)
-                          </label>
-                          <input
-                            type="text"
-                            value={canalEntradaInput}
-                            onChange={(e) =>
-                              setCanalEntradaInput(e.target.value)
-                            }
-                            placeholder="Ex: Telefone"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Motivo do Contato (motivo_contato)
-                          </label>
-                          <input
-                            type="text"
-                            value={motivoContatoInput}
-                            onChange={(e) =>
-                              setMotivoContatoInput(e.target.value)
-                            }
-                            placeholder="Ex: Plano"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Submotivo do Plano (submotivo_plano)
-                          </label>
-                          <input
-                            type="text"
-                            value={submotivoPlanoInput}
-                            onChange={(e) =>
-                              setSubmotivoPlanoInput(e.target.value)
-                            }
-                            placeholder="Ex: Coparticipação"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
-                          />
-                        </div>
-
-                        <div className="sm:col-span-2">
-                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                            Nome do Atendente no Ticket (nome_atendente)
-                          </label>
-                          <input
-                            type="text"
-                            value={nomeAtendenteInput}
-                            onChange={(e) =>
-                              setNomeAtendenteInput(e.target.value)
-                            }
-                            placeholder="Ex: Graziela Fernandes"
-                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
                           />
                         </div>
                       </div>
-                    </>
+
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
+                          Data da Monitoria *
+                        </label>
+                        <div className="relative">
+                          <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3 pointer-events-none" />
+                          <input
+                            type="date"
+                            required
+                            value={dataMonitoriaInput}
+                            onChange={(e) =>
+                              setDataMonitoriaInput(e.target.value)
+                            }
+                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   ) : (
                     /* ==============================================================
                        MODO AQUISIÇÃO / DEMAIS SETORES: TELEFONE + 13 CAMPOS DO CLIENTE
@@ -2177,16 +1999,174 @@ function AnalystEvaluationFlowInner() {
                     </>
                   )}
 
-                  <div className="flex items-center justify-end pt-2 border-t border-zinc-800/80">
+                  {/* ==============================================================
+                     ANEXO DE GRAVAÇÃO(ÕES) DIRETO NO PASSO 1
+                     ============================================================== */}
+                  <div className="pt-4 border-t border-zinc-800/80 space-y-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-bold text-zinc-100">
+                          Gravações da Ligação ({recordings.length}) *
+                        </h3>
+                        <p className="text-[11px] text-zinc-400">
+                          {isSacOrRetencao
+                            ? "Anexe a ligação; ao avançar, os dados do ticket e a transcrição são puxados automaticamente"
+                            : "Anexe uma ou mais ligações vinculadas a este atendimento"}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleAddRecordingSlot}
+                        className="h-8 px-3 rounded-lg border border-zinc-700 bg-[#141418] hover:bg-zinc-800 text-xs font-semibold text-zinc-100 inline-flex items-center gap-1.5 transition-colors"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>+ Adicionar outra ligação</span>
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {recordings.map((slot, index) => (
+                        <div
+                          key={slot.id}
+                          className={`p-3.5 rounded-xl border transition-colors space-y-2.5 ${
+                            slot.error
+                              ? "border-red-700/80 bg-red-950/15"
+                              : "border-zinc-800 bg-[#121215]"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-mono font-semibold text-zinc-200">
+                              Ligação #{index + 1}{" "}
+                              {index === 0 ? "(Principal)" : `(Adicional)`} *
+                            </span>
+
+                            {recordings.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleRemoveRecordingSlot(slot.id)
+                                }
+                                className="h-7 px-2.5 rounded-md border border-zinc-800 bg-[#0b0b0d] hover:border-red-900/70 hover:bg-red-950/40 text-[11px] font-medium text-zinc-400 hover:text-red-300 inline-flex items-center gap-1 transition-colors"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                <span>Remover</span>
+                              </button>
+                            )}
+                          </div>
+
+                          <label
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              if (
+                                e.dataTransfer.files &&
+                                e.dataTransfer.files[0]
+                              ) {
+                                handleRecordingFileSelect(
+                                  slot.id,
+                                  e.dataTransfer.files[0]
+                                );
+                              }
+                            }}
+                            className={`p-3.5 rounded-xl border border-dashed cursor-pointer transition-all flex flex-col sm:flex-row items-center justify-between gap-3 ${
+                              slot.file
+                                ? "border-zinc-600 bg-[#16161b]"
+                                : "border-zinc-800 hover:border-zinc-600 bg-[#0b0b0d]"
+                            }`}
+                          >
+                            <input
+                              type="file"
+                              accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm"
+                              className="hidden"
+                              onChange={(e) =>
+                                handleRecordingFileSelect(
+                                  slot.id,
+                                  e.target.files && e.target.files[0]
+                                    ? e.target.files[0]
+                                    : null
+                                )
+                              }
+                            />
+
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="h-9 w-9 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
+                                {slot.file ? (
+                                  <FileAudio className="h-4 w-4 text-zinc-100" />
+                                ) : (
+                                  <UploadCloud className="h-4 w-4 text-zinc-400" />
+                                )}
+                              </div>
+
+                              {slot.file ? (
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-zinc-100 truncate max-w-[260px] sm:max-w-[360px]">
+                                    {slot.file.name}
+                                  </p>
+                                  <p className="text-[11px] text-zinc-400 font-mono">
+                                    {(slot.file.size / 1024).toFixed(1)} KB •{" "}
+                                    {formatDuration(slot.durationSeconds)}
+                                  </p>
+                                </div>
+                              ) : (
+                                <div>
+                                  <p className="text-xs font-medium text-zinc-200">
+                                    Clique ou arraste o áudio da Ligação #
+                                    {index + 1} (MP3, WAV, OGG)
+                                  </p>
+                                  <p className="text-[11px] text-zinc-500">
+                                    Obrigatório para iniciar a transcrição e
+                                    avaliação
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+
+                            <span className="h-8 px-3 rounded-lg border border-zinc-700 bg-zinc-900 text-[11px] font-medium text-zinc-200 inline-flex items-center shrink-0">
+                              {slot.file
+                                ? "Trocar arquivo"
+                                : "Selecionar arquivo"}
+                            </span>
+                          </label>
+
+                          {slot.error && (
+                            <p className="text-[11px] text-red-300 font-medium flex items-center gap-1.5">
+                              <AlertCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />
+                              <span>{slot.error}</span>
+                            </p>
+                          )}
+
+                          {slot.previewUrl && (
+                            <CallAudioPlayer
+                              audioUrl={slot.previewUrl}
+                              externalCallId={
+                                slot.file?.name || `Ligacao_${index + 1}`
+                              }
+                              durationSeconds={slot.durationSeconds}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end pt-3 border-t border-zinc-800/80">
                     <button
                       type="submit"
-                      disabled={lookupLoading}
+                      disabled={
+                        lookupLoading || uploadAttachmentMutation.isPending
+                      }
                       className="h-10 px-5 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 text-xs font-semibold inline-flex items-center justify-center gap-2 shrink-0 transition-colors"
                     >
+                      <Headphones className="h-3.5 w-3.5" />
                       <span>
-                        {lookupLoading
-                          ? "Consultando..."
-                          : "Continuar para Ligações"}
+                        {lookupLoading || uploadAttachmentMutation.isPending
+                          ? "Puxando dados e enviando áudio..."
+                          : isSacOrRetencao
+                          ? "Puxar Dados, Transcrever e Ir para Avaliação"
+                          : `Ir para Avaliação (${recordings.length} áudio${
+                              recordings.length > 1 ? "s" : ""
+                            })`}
                       </span>
                       <ArrowRight className="h-3.5 w-3.5" />
                     </button>
@@ -2196,259 +2176,12 @@ function AnalystEvaluationFlowInner() {
             )}
 
             {/* ====================================================================
-                STEP 2: ADICIONAR LIGAÇÕES (LISTA DINÂMICA DE 1, 2, 3 OU MAIS ÁUDIOS)
-               ==================================================================== */}
-            {step === 2 && (
-              <motion.div
-                key="step-2"
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.18 }}
-                className="max-w-3xl p-5 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-5"
-              >
-                {/* Resumo Contextual da Etapa 1 */}
-                {isSacOrRetencao ? (
-                  <div className="p-3.5 rounded-xl border border-zinc-800 bg-[#121215] grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
-                    <div>
-                      <span className="text-[10px] font-mono text-zinc-500 block">
-                        Ticket Zendesk
-                      </span>
-                      <span className="font-mono text-zinc-100 font-semibold truncate block">
-                        {ticketInput.replace(/#/g, "").trim()}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-mono text-zinc-500 block">
-                        Data do Atendimento
-                      </span>
-                      <span className="font-mono text-zinc-100 truncate block">
-                        {dataAtendimentoInput}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-mono text-zinc-500 block">
-                        Data da Monitoria
-                      </span>
-                      <span className="font-mono text-zinc-100 truncate block">
-                        {dataMonitoriaInput}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-3.5 rounded-xl border border-zinc-800 bg-[#121215] grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                    <div>
-                      <span className="text-[10px] font-mono text-zinc-500 block">
-                        Telefone
-                      </span>
-                      <span className="font-mono text-zinc-100 font-medium truncate block">
-                        {extractCleanPhoneDigits(phoneInput) || phoneInput}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-mono text-zinc-500 block">
-                        Nome
-                      </span>
-                      <span className="text-zinc-100 font-medium truncate block">
-                        {customerNameInput || "-"}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-mono text-zinc-500 block">
-                        CPF
-                      </span>
-                      <span className="font-mono text-zinc-100 truncate block">
-                        {customerCpfInput || "-"}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-mono text-zinc-500 block">
-                        Proposta / Data Venda
-                      </span>
-                      <span className="font-mono text-zinc-200 truncate block">
-                        {proposalInput || "-"} • {saleDateInput || "-"}
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Cabeçalho da Lista Dinâmica de Ligações */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-zinc-800/80">
-                  <div>
-                    <h2 className="text-sm font-bold text-zinc-100">
-                      Gravações da Avaliação ({recordings.length})
-                    </h2>
-                    <p className="text-[11px] text-zinc-400">
-                      Adicione uma ou mais ligações vinculadas a este
-                      atendimento
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleAddRecordingSlot}
-                    className="h-8 px-3 rounded-lg border border-zinc-700 bg-[#141418] hover:bg-zinc-800 text-xs font-semibold text-zinc-100 inline-flex items-center gap-1.5 transition-colors"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    <span>+ Adicionar outra ligação</span>
-                  </button>
-                </div>
-
-                {/* Array Dinâmico de Ligações */}
-                <div className="space-y-3.5">
-                  {recordings.map((slot, index) => (
-                    <div
-                      key={slot.id}
-                      className={`p-4 rounded-xl border transition-colors space-y-3 ${
-                        slot.error
-                          ? "border-red-700/80 bg-red-950/15"
-                          : "border-zinc-800 bg-[#121215]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-mono font-semibold text-zinc-200">
-                          Ligação #{index + 1}{" "}
-                          {index === 0 ? "(Principal)" : `(Adicional)`} *
-                        </span>
-
-                        {recordings.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveRecordingSlot(slot.id)}
-                            className="h-7 px-2.5 rounded-md border border-zinc-800 bg-[#0b0b0d] hover:border-red-900/70 hover:bg-red-950/40 text-[11px] font-medium text-zinc-400 hover:text-red-300 inline-flex items-center gap-1 transition-colors"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            <span>Remover</span>
-                          </button>
-                        )}
-                      </div>
-
-                      <label
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          if (
-                            e.dataTransfer.files &&
-                            e.dataTransfer.files[0]
-                          ) {
-                            handleRecordingFileSelect(
-                              slot.id,
-                              e.dataTransfer.files[0]
-                            );
-                          }
-                        }}
-                        className={`p-4 rounded-xl border border-dashed cursor-pointer transition-all flex flex-col sm:flex-row items-center justify-between gap-3 ${
-                          slot.file
-                            ? "border-zinc-600 bg-[#16161b]"
-                            : "border-zinc-800 hover:border-zinc-600 bg-[#0b0b0d]"
-                        }`}
-                      >
-                        <input
-                          type="file"
-                          accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm"
-                          className="hidden"
-                          onChange={(e) =>
-                            handleRecordingFileSelect(
-                              slot.id,
-                              e.target.files && e.target.files[0]
-                                ? e.target.files[0]
-                                : null
-                            )
-                          }
-                        />
-
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="h-9 w-9 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0">
-                            {slot.file ? (
-                              <FileAudio className="h-4 w-4 text-zinc-100" />
-                            ) : (
-                              <UploadCloud className="h-4 w-4 text-zinc-400" />
-                            )}
-                          </div>
-
-                          {slot.file ? (
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-zinc-100 truncate max-w-[260px] sm:max-w-[360px]">
-                                {slot.file.name}
-                              </p>
-                              <p className="text-[11px] text-zinc-400 font-mono">
-                                {(slot.file.size / 1024).toFixed(1)} KB •{" "}
-                                {formatDuration(slot.durationSeconds)}
-                              </p>
-                            </div>
-                          ) : (
-                            <div>
-                              <p className="text-xs font-medium text-zinc-200">
-                                Clique ou arraste o áudio da Ligação #
-                                {index + 1} (MP3, WAV, OGG)
-                              </p>
-                              <p className="text-[11px] text-zinc-500">
-                                Obrigatório para validar este slot
-                              </p>
-                            </div>
-                          )}
-                        </div>
-
-                        <span className="h-8 px-3 rounded-lg border border-zinc-700 bg-zinc-900 text-[11px] font-medium text-zinc-200 inline-flex items-center shrink-0">
-                          {slot.file ? "Trocar arquivo" : "Selecionar arquivo"}
-                        </span>
-                      </label>
-
-                      {slot.error && (
-                        <p className="text-[11px] text-red-300 font-medium flex items-center gap-1.5">
-                          <AlertCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />
-                          <span>{slot.error}</span>
-                        </p>
-                      )}
-
-                      {slot.previewUrl && (
-                        <CallAudioPlayer
-                          audioUrl={slot.previewUrl}
-                          externalCallId={
-                            slot.file?.name || `Ligacao_${index + 1}`
-                          }
-                          durationSeconds={slot.durationSeconds}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex items-center justify-between pt-2 border-t border-zinc-800/80">
-                  <button
-                    type="button"
-                    onClick={() => setStep(1)}
-                    className="h-9 px-4 rounded-lg border border-zinc-800 text-xs text-zinc-400 hover:text-zinc-100"
-                  >
-                    Voltar
-                  </button>
-                  <button
-                    type="button"
-                    disabled={uploadAttachmentMutation.isPending}
-                    onClick={() => uploadAttachmentMutation.mutate()}
-                    className="h-9 px-5 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 text-xs font-semibold inline-flex items-center gap-2"
-                  >
-                    <Headphones className="h-3.5 w-3.5" />
-                    <span>
-                      {uploadAttachmentMutation.isPending
-                        ? "Enviando áudios..."
-                        : `Ir para Avaliação (${recordings.length} áudio${
-                            recordings.length > 1 ? "s" : ""
-                          })`}
-                    </span>
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {/* ====================================================================
-                STEP 3: WORKSTATION MINIMALISTA DE AVALIAÇÃO QA & ÁUDIO (ELEVENLABS STUDIO)
+                STEP 2: WORKSTATION MINIMALISTA DE AVALIAÇÃO QA & ÁUDIO (ELEVENLABS STUDIO)
                 Viewport-Locked • Zero Caixas Pesadas • Listas Flat com Divisores Sutis
                ==================================================================== */}
-            {step === 3 && selectedCall && activeFormForCall && (
+            {step === 2 && selectedCall && activeFormForCall && (
               <motion.div
-                key="step-3-studio"
+                key="step-2-studio"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -3365,7 +3098,7 @@ function AnalystEvaluationFlowInner() {
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setStep(2)}
+                          onClick={() => setStep(1)}
                           className="h-8 px-3 rounded-md border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800 text-xs text-zinc-300 transition-colors"
                         >
                           Voltar

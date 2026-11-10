@@ -59,10 +59,10 @@ public class CallRecordService {
     @Value("${app.integrations.customer-webhook.url:${CUSTOMER_WEBHOOK_URL:}}")
     private String customerWebhookUrl;
 
-    @Value("${app.integrations.audio-evaluation-webhook.url:${AUDIO_EVALUATION_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7}}")
+    @Value("${app.integrations.audio-evaluation-webhook.url:${AUDIO_EVALUATION_WEBHOOK_URL:}}")
     private String audioEvaluationWebhookUrl;
 
-    @Value("${app.integrations.sac-retencao-webhook.url:${SAC_RETENCAO_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/ecb17220-4821-4816-9796-2b9730cd7d65}}")
+    @Value("${app.integrations.sac-retencao-webhook.url:${SAC_RETENCAO_WEBHOOK_URL:}}")
     private String sacRetencaoWebhookUrl;
 
     @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}")
@@ -308,7 +308,7 @@ public class CallRecordService {
         log.info("Gravação(ões) anexada(s) pela gestora registrada(s): externalCallId={}, analyst={}, qtdAudios={}",
                 extCallId, analyst.getEmail(), recordingsMeta.size());
 
-        // Dispara imediatamente para https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7
+        // Dispara o webhook de transcrição/avaliação configurado nas variáveis de ambiente
         dispatchAudioWorkflowWebhookAsync(
                 saved,
                 customer,
@@ -389,7 +389,10 @@ public class CallRecordService {
         final String targetUrl = (audioEvaluationWebhookUrl != null && !audioEvaluationWebhookUrl.isBlank())
                 ? audioEvaluationWebhookUrl.trim()
                 : (customerWebhookUrl != null ? customerWebhookUrl.trim() : "");
-        if (targetUrl.isEmpty()) {
+        final String sacTargetUrl = (sacRetencaoWebhookUrl != null && !sacRetencaoWebhookUrl.isBlank())
+                ? sacRetencaoWebhookUrl.trim()
+                : "";
+        if (targetUrl.isEmpty() && sacTargetUrl.isEmpty()) {
             return;
         }
 

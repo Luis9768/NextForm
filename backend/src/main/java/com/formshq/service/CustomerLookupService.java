@@ -58,7 +58,7 @@ public class CustomerLookupService {
             @Value("${app.integrations.customer-api.api-token:crm-external-bearer-token-2026}") String apiToken,
             @Value("${app.integrations.customer-api.enabled:false}") boolean externalApiEnabled,
             @Value("${app.integrations.customer-webhook.url:${CUSTOMER_WEBHOOK_URL:}}") String defaultWebhookUrl,
-            @Value("${app.integrations.sac-retencao-webhook.url:${SAC_RETENCAO_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/ecb17220-4821-4816-9796-2b9730cd7d65}}") String sacRetencaoWebhookUrl,
+            @Value("${app.integrations.sac-retencao-webhook.url:${SAC_RETENCAO_WEBHOOK_URL:}}") String sacRetencaoWebhookUrl,
             @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String directusBaseUrl,
             @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String directusApiToken
     ) {

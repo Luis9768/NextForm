@@ -67,8 +67,12 @@ app:
       region: ${R2_REGION:auto}
       public-url: ${R2_PUBLIC_URL:}
   integrations:
+    customer-webhook:
+      url: ${CUSTOMER_WEBHOOK_URL:}
+    audio-evaluation-webhook:
+      url: ${AUDIO_EVALUATION_WEBHOOK_URL:}
     sac-retencao-webhook:
-      url: ${SAC_RETENCAO_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/ecb17220-4821-4816-9796-2b9730cd7d65}
+      url: ${SAC_RETENCAO_WEBHOOK_URL:}
     directus:
       base-url: ${DIRECTUS_BASE_URL:}
       api-token: ${DIRECTUS_API_TOKEN:}
