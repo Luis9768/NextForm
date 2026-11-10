@@ -53,6 +53,7 @@ export interface CustomerLookupResponse {
   customer: CustomerInfo;
   source: string;
   recordings: CallRecord[];
+  rawData?: Record<string, unknown>;
 }
 
 export interface AuthResponse {

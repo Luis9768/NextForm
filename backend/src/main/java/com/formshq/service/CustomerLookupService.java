@@ -39,21 +39,26 @@ public class CustomerLookupService {
     private final CallRecordRepository callRecordRepository;
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
+    private final R2ObjectStorageService r2ObjectStorageService;
     private final RestClient restClient;
     private final boolean externalApiEnabled;
     private final String defaultWebhookUrl;
+    private final String sacRetencaoWebhookUrl;
     private final String directusBaseUrl;
     private final String directusApiToken;
+    private volatile boolean probeWavUploaded = false;
 
     public CustomerLookupService(
             CustomerRepository customerRepository,
             CallRecordRepository callRecordRepository,
             UserRepository userRepository,
             ObjectMapper objectMapper,
+            R2ObjectStorageService r2ObjectStorageService,
             @Value("${app.integrations.customer-api.base-url:https://api.crm-externo.empresa.com/v1}") String baseUrl,
             @Value("${app.integrations.customer-api.api-token:crm-external-bearer-token-2026}") String apiToken,
             @Value("${app.integrations.customer-api.enabled:false}") boolean externalApiEnabled,
             @Value("${app.integrations.customer-webhook.url:${CUSTOMER_WEBHOOK_URL:}}") String defaultWebhookUrl,
+            @Value("${app.integrations.sac-retencao-webhook.url:${SAC_RETENCAO_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/ecb17220-4821-4816-9796-2b9730cd7d65}}") String sacRetencaoWebhookUrl,
             @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}") String directusBaseUrl,
             @Value("${app.integrations.directus.api-token:${DIRECTUS_API_TOKEN:}}") String directusApiToken
     ) {
@@ -61,8 +66,10 @@ public class CustomerLookupService {
         this.callRecordRepository = callRecordRepository;
         this.userRepository = userRepository;
         this.objectMapper = objectMapper;
+        this.r2ObjectStorageService = r2ObjectStorageService;
         this.externalApiEnabled = externalApiEnabled;
         this.defaultWebhookUrl = defaultWebhookUrl;
+        this.sacRetencaoWebhookUrl = sacRetencaoWebhookUrl;
         this.directusBaseUrl = directusBaseUrl;
         this.directusApiToken = directusApiToken;
         this.restClient = RestClient.builder()
@@ -90,9 +97,12 @@ public class CustomerLookupService {
         }
 
         String detectedType = resolveKeyType(rawKey, request.keyType());
+        String cleanTicket = rawKey.replace("#", "").trim();
         String cleanPhone = normalizePhone(request.phone() != null && !request.phone().isBlank() ? request.phone() : rawKey);
         String digitsOnlyKey = rawKey.replaceAll("\\D", "");
-        String cleanValue = "TELEFONE".equals(detectedType) ? cleanPhone : rawKey.trim();
+        String cleanValue = "TELEFONE".equals(detectedType)
+                ? cleanPhone
+                : ("TICKET".equals(detectedType) ? cleanTicket : rawKey.trim());
 
         String paramCpf = (request.cpf() != null && !request.cpf().isBlank())
                 ? request.cpf().replaceAll("\\D", "")
@@ -107,6 +117,40 @@ public class CustomerLookupService {
                 ? request.name().trim()
                 : ("NOME".equals(detectedType) ? cleanValue : "");
 
+        // Fluxo dedicado de busca por Ticket (sem #) para SAC e Retenção
+        if ("TICKET".equalsIgnoreCase(detectedType) && sacRetencaoWebhookUrl != null && !sacRetencaoWebhookUrl.isBlank()) {
+            try {
+                String probeAudioUrl = resolveProbeAudioUrlForTicketLookup();
+                String encodedAudiUrl = java.net.URLEncoder.encode(probeAudioUrl != null ? probeAudioUrl : "", java.nio.charset.StandardCharsets.UTF_8);
+                String encodedTicket = java.net.URLEncoder.encode(cleanTicket, java.nio.charset.StandardCharsets.UTF_8);
+                String baseSacUrl = sacRetencaoWebhookUrl.trim();
+                String sep = baseSacUrl.contains("?") ? "&" : "?";
+                URI getUri = URI.create(baseSacUrl + sep + "audiUrl=" + encodedAudiUrl + "&ticket=" + encodedTicket);
+
+                String rawSacBody = RestClient.create()
+                        .get()
+                        .uri(getUri)
+                        .retrieve()
+                        .body(String.class);
+
+                Map<String, Object> sacResponse = parseWebhookJsonToMap(rawSacBody);
+                if (hasMeaningfulContactData(sacResponse)) {
+                    Customer synced = syncCustomerFromExternalMap(
+                            cleanTicket,
+                            sacResponse,
+                            paramPersonName,
+                            paramCpf,
+                            paramMotherName,
+                            paramFatherName
+                    );
+                    List<CallRecordResponse> calls = findOrProvisionCallsForCustomer(synced, synced.getPhone(), request.analystId());
+                    return new CustomerLookupResponse(CustomerDto.fromEntity(synced), "WEBHOOK_SAC_RETENCAO_TICKET", calls, sacResponse);
+                }
+            } catch (Exception e) {
+                log.warn("Aviso ao consultar webhook SAC/Retenção por ticket={}: {}", cleanTicket, e.getMessage());
+            }
+        }
+
         String targetWebhook = resolveSafeWebhookUrl(request.webhookUrl());
         String source = "WEBHOOK_CRM_SYNC (" + detectedType + ")";
 
@@ -114,6 +158,8 @@ public class CustomerLookupService {
             try {
                 Map<String, Object> webhookPayload = new LinkedHashMap<>();
                 webhookPayload.put("telefone", !cleanPhone.isEmpty() ? cleanPhone : cleanValue);
+                webhookPayload.put("ticket", cleanTicket);
+                webhookPayload.put("Ticket", cleanTicket);
                 webhookPayload.put("cpf", !paramCpf.isEmpty() ? paramCpf : (!digitsOnlyKey.isEmpty() ? digitsOnlyKey : cleanValue));
                 webhookPayload.put("nome_da_mae", paramMotherName);
                 webhookPayload.put("nome_do_pai", paramFatherName);
@@ -158,7 +204,7 @@ public class CustomerLookupService {
                     );
                     source = "WEBHOOK_POST_DIRECTUS";
                     List<CallRecordResponse> calls = findOrProvisionCallsForCustomer(synced, synced.getPhone(), request.analystId());
-                    return new CustomerLookupResponse(CustomerDto.fromEntity(synced), source, calls);
+                    return new CustomerLookupResponse(CustomerDto.fromEntity(synced), source, calls, webhookResponse);
                 }
             } catch (Exception e) {
                 log.warn("Webhook externo ({}) indisponível ou sem retorno para key={}: {}. Tentando fallback Directus.",
@@ -352,10 +398,56 @@ public class CustomerLookupService {
         }
         String check = pickAnyString(
                 map,
-                List.of("Nome", "nome", "nome_da_pessoa", "CPF", "cpf", "Nome_da_mae", "nome_da_mae", "Nome_do_pai", "nome_do_pai", "Proposta", "proposta"),
+                List.of(
+                        "Nome", "nome", "nome_completo", "nome_da_pessoa",
+                        "CPF", "cpf", "telefone_origem", "ticket_id", "protocolo",
+                        "administradora", "operadora",
+                        "Nome_da_mae", "nome_da_mae", "Nome_do_pai", "nome_do_pai",
+                        "Proposta", "proposta"
+                ),
                 ""
         );
         return !check.isBlank();
+    }
+
+    private String resolveProbeAudioUrlForTicketLookup() {
+        String probeKey = "probe_ticket_lookup.wav";
+        if (r2ObjectStorageService != null && r2ObjectStorageService.isConfigured()) {
+            if (!probeWavUploaded) {
+                try {
+                    byte[] silentWav = buildMinimalSilentWav();
+                    r2ObjectStorageService.uploadAudioObject(probeKey, silentWav, "audio/wav");
+                    probeWavUploaded = true;
+                } catch (Exception ignored) {
+                }
+            }
+            String presigned = r2ObjectStorageService.generatePresignedGetUrl(probeKey, 86400).orElse(null);
+            if (presigned != null) {
+                return presigned.replace("%2F", "/");
+            }
+        }
+        return "";
+    }
+
+    private byte[] buildMinimalSilentWav() {
+        int sampleRate = 8000;
+        int numSamples = 1600; // 0.2s mono 16-bit
+        int dataSize = numSamples * 2;
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(44 + dataSize).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        buf.put("RIFF".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        buf.putInt(36 + dataSize);
+        buf.put("WAVE".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        buf.put("fmt ".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        buf.putInt(16);
+        buf.putShort((short) 1);
+        buf.putShort((short) 1);
+        buf.putInt(sampleRate);
+        buf.putInt(sampleRate * 2);
+        buf.putShort((short) 2);
+        buf.putShort((short) 16);
+        buf.put("data".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        buf.putInt(dataSize);
+        return buf.array();
     }
 
     @Transactional
@@ -547,7 +639,7 @@ public class CustomerLookupService {
             String fallbackMotherName,
             String fallbackFatherName
     ) {
-        String rawPhone = pickAnyString(data, List.of("Telefone", "telefone", "Telefone_Portabilidade", "phone", "contato", "celular"), fallbackKey);
+        String rawPhone = pickAnyString(data, List.of("Telefone", "telefone", "telefone_origem", "Telefone_Portabilidade", "phone", "contato", "celular"), fallbackKey);
         String cleanPhone = normalizePhone(rawPhone);
         if (cleanPhone.isEmpty()) {
             int hash = fallbackKey.hashCode() & 0x7fffffff;
@@ -560,7 +652,7 @@ public class CustomerLookupService {
 
         customer.setPhone(lookupPhone);
         customer.setSaleDate(pickAnyString(data, List.of("Data_Venda", "Data_da_Venda", "data_da_venda", "dataDaVenda", "saleDate"), ""));
-        customer.setName(pickAnyString(data, List.of("Nome", "nome", "nome_da_pessoa", "Nome_da_Pessoa", "name", "cliente"),
+        customer.setName(pickAnyString(data, List.of("Nome", "nome", "nome_completo", "nome_da_pessoa", "Nome_da_Pessoa", "name", "cliente"),
                 !fallbackPersonName.isBlank() ? fallbackPersonName : ("Contato " + lookupPhone)));
         customer.setDocument(pickAnyString(data, List.of("CPF", "Cpf", "cpf", "document", "documento"),
                 !fallbackCpf.isBlank() ? fallbackCpf : ""));
@@ -569,15 +661,15 @@ public class CustomerLookupService {
                 !fallbackMotherName.isBlank() ? fallbackMotherName : ""));
         customer.setFatherName(pickAnyString(data, List.of("Nome_do_pai", "Nome_do_Pai", "nome_do_pai", "nomeDoPai", "fatherName", "pai", "parentName"),
                 !fallbackFatherName.isBlank() ? fallbackFatherName : ""));
-        customer.setContractedPlan(pickAnyString(data, List.of("Plano_Contratado", "plano_contratado", "planoContratado", "contractedPlan", "plano"), ""));
-        customer.setProposal(pickAnyString(data, List.of("Proposta", "proposta", "proposal", "protocolo"), ""));
+        customer.setContractedPlan(pickAnyString(data, List.of("Plano_Contratado", "plano_contratado", "planoContratado", "contractedPlan", "plano", "operadora", "administradora"), ""));
+        customer.setProposal(pickAnyString(data, List.of("Proposta", "proposta", "proposal", "ticket_id", "ticket", "protocolo"), "").replace("#", "").trim());
         customer.setEmail(pickAnyString(data, List.of("Email", "email", "e_mail"), ""));
         customer.setPaymentMethod(pickAnyString(data, List.of("Forma_de_Pagamento", "forma_de_pagamento", "formaDePagamento", "paymentMethod"), ""));
         customer.setInvoiceType(pickAnyString(data, List.of("Tipo_de_Fatura", "tipo_de_fatura", "tipoDeFatura", "invoiceType"), ""));
         customer.setFullAddress(pickAnyString(data, List.of("Endereco_Completo", "endereco_completo", "enderecoCompleto", "fullAddress", "endereco"), ""));
         customer.setDueDate(pickAnyString(data, List.of("Vencimento", "vencimento", "dueDate"), ""));
         customer.setEarlyPortability(pickAnyString(data, List.of("Portabilidade_Antecipada", "portabilidade_antecipada", "portabilidadeAntecipada", "earlyPortability"), ""));
-        customer.setProtocol(pickAnyString(data, List.of("Proposta", "protocol", "protocolo"), ""));
+        customer.setProtocol(pickAnyString(data, List.of("protocolo", "Proposta", "protocol", "ticket_id", "ticket"), "").replace("#", "").trim());
 
         return customerRepository.save(customer);
     }

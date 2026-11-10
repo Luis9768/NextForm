@@ -62,6 +62,9 @@ public class CallRecordService {
     @Value("${app.integrations.audio-evaluation-webhook.url:${AUDIO_EVALUATION_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/76f4953c-1049-4528-8923-1a1fb69890f7}}")
     private String audioEvaluationWebhookUrl;
 
+    @Value("${app.integrations.sac-retencao-webhook.url:${SAC_RETENCAO_WEBHOOK_URL:https://projetos.n8n.hdstec.com.br/webhook/ecb17220-4821-4816-9796-2b9730cd7d65}}")
+    private String sacRetencaoWebhookUrl;
+
     @Value("${app.integrations.directus.base-url:${DIRECTUS_BASE_URL:}}")
     private String directusBaseUrl;
 
@@ -273,7 +276,9 @@ public class CallRecordService {
             metadata.put("returnAudioUrl", audioUrlsList.get(1));
         }
         if (ticket != null && !ticket.isBlank()) {
-            metadata.put("ticket", ticket.trim());
+            String cleanTicket = ticket.replace("#", "").trim();
+            metadata.put("ticket", cleanTicket);
+            metadata.put("ticket_id", cleanTicket);
         }
         if (attendanceDate != null && !attendanceDate.isBlank()) {
             metadata.put("attendanceDate", attendanceDate.trim());
@@ -476,14 +481,28 @@ public class CallRecordService {
                 payload.put("Audio_Ligacao_Retorno", directusReturnId);
                 payload.put("audio_chamada_retorno", directusReturnId);
             }
+            String cleanTicket = initialMeta.getOrDefault("ticket", customer.getProtocol() != null ? customer.getProtocol() : "")
+                    .toString()
+                    .replace("#", "")
+                    .trim();
+            String sectorStr = initialMeta.getOrDefault("sector", analyst.getDepartment() != null ? analyst.getDepartment() : "")
+                    .toString();
+            String lowerSector = sectorStr.toLowerCase();
+            boolean isSacOrRetencao = lowerSector.contains("sac")
+                    || lowerSector.contains("reten")
+                    || lowerSector.contains("cobran")
+                    || (!cleanTicket.isEmpty() && !cleanTicket.startsWith("DIR-"));
+
             payload.put("audioUrl", reachableAudioUrl);
+            payload.put("audiUrl", presignedR2Url != null ? presignedR2Url : reachableAudioUrl);
             payload.put("Operador", analyst.getId().toString());
             payload.put("operadorNome", analyst.getName());
             payload.put("operadorEmail", analyst.getEmail());
-            payload.put("Ticket", initialMeta.getOrDefault("ticket", customer.getProtocol()));
+            payload.put("Ticket", cleanTicket);
+            payload.put("ticket", cleanTicket);
             payload.put("Data_do_Atendimento", initialMeta.getOrDefault("attendanceDate", customer.getSaleDate()));
             payload.put("Data_monitoria", initialMeta.getOrDefault("monitoringDate", ""));
-            payload.put("Setor", initialMeta.getOrDefault("sector", analyst.getDepartment()));
+            payload.put("Setor", sectorStr);
             payload.put("Nome", customer.getName());
             payload.put("CPF", customer.getDocument());
             payload.put("Proposta", customer.getProposal());
@@ -502,24 +521,53 @@ public class CallRecordService {
             String responseBody = null;
             String lastErrorMsg = null;
 
+            String effectiveWebhookBaseUrl = (isSacOrRetencao && sacRetencaoWebhookUrl != null && !sacRetencaoWebhookUrl.isBlank())
+                    ? sacRetencaoWebhookUrl.trim()
+                    : targetUrl;
+
             // Tenta primeiro a URL de produção (/webhook/...) e, se 404 (modo de teste no n8n), tenta /webhook-test/...
             List<String> candidateUrls = new java.util.ArrayList<>();
-            candidateUrls.add(targetUrl);
-            if (targetUrl.contains("/webhook/")) {
-                candidateUrls.add(targetUrl.replace("/webhook/", "/webhook-test/"));
+            candidateUrls.add(effectiveWebhookBaseUrl);
+            if (effectiveWebhookBaseUrl.contains("/webhook/")) {
+                candidateUrls.add(effectiveWebhookBaseUrl.replace("/webhook/", "/webhook-test/"));
             }
 
             for (String candidateUrl : candidateUrls) {
                 try {
-                    log.info("Disparando webhook de avaliação de áudio para {} (callId={}, ligacao={})",
-                            candidateUrl, callIdStr, effectiveLigacaoId);
-                    responseBody = RestClient.create()
-                            .post()
-                            .uri(candidateUrl)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .body(payload)
-                            .retrieve()
-                            .body(String.class);
+                    if (isSacOrRetencao) {
+                        String sacAudioUrl = presignedR2Url != null
+                                ? presignedR2Url.replace("%2F", "/")
+                                : (publicDirectusAudioUrl != null ? publicDirectusAudioUrl : audioUrl);
+                        String encodedAudiUrl = java.net.URLEncoder.encode(
+                                sacAudioUrl != null ? sacAudioUrl : "",
+                                java.nio.charset.StandardCharsets.UTF_8
+                        );
+                        String encodedTicket = java.net.URLEncoder.encode(
+                                cleanTicket,
+                                java.nio.charset.StandardCharsets.UTF_8
+                        );
+                        String sep = candidateUrl.contains("?") ? "&" : "?";
+                        java.net.URI getUri = java.net.URI.create(
+                                candidateUrl + sep + "audiUrl=" + encodedAudiUrl + "&ticket=" + encodedTicket
+                        );
+                        log.info("Disparando webhook SAC/Retenção (GET) para {} (callId={}, ticket={})",
+                                candidateUrl, callIdStr, cleanTicket);
+                        responseBody = RestClient.create()
+                                .get()
+                                .uri(getUri)
+                                .retrieve()
+                                .body(String.class);
+                    } else {
+                        log.info("Disparando webhook de avaliação de áudio (POST) para {} (callId={}, ligacao={})",
+                                candidateUrl, callIdStr, effectiveLigacaoId);
+                        responseBody = RestClient.create()
+                                .post()
+                                .uri(candidateUrl)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .body(payload)
+                                .retrieve()
+                                .body(String.class);
+                    }
                     lastErrorMsg = null;
                     break;
                 } catch (Exception e) {
@@ -531,7 +579,10 @@ public class CallRecordService {
             if (responseBody != null && !responseBody.isBlank()) {
                 try {
                     Object parsed = objectMapper.readValue(responseBody, Object.class);
-                    directusEvaluationSyncService.upsertFromWorkflowPayload(callIdStr, "AUTO", parsed);
+                    String collectionHint = isSacOrRetencao
+                            ? ((lowerSector.contains("reten") || lowerSector.contains("cobran")) ? "avaliacao_retencao" : "avaliacao_sac")
+                            : "AUTO";
+                    directusEvaluationSyncService.upsertFromWorkflowPayload(callIdStr, collectionHint, parsed);
                     log.info("Resposta do webhook n8n processada com sucesso para a ligação {}", extCallId);
                     return;
                 } catch (Exception parseEx) {

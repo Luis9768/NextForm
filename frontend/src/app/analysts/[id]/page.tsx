@@ -265,6 +265,21 @@ function parseTranscriptTurns(rawText: string): TranscriptTurn[] {
       ) {
         speaker = "CLIENTE";
         speakerLabel = "Cliente";
+      } else if (lowerSpk.includes("indefinido")) {
+        const lowerTxt = spokenText.toLowerCase();
+        if (
+          lowerTxt.includes("central de relacionamento") ||
+          lowerTxt.includes("confirmação de dados") ||
+          lowerTxt.includes("protocolo de atendimento") ||
+          lowerTxt.includes("posso ajudar") ||
+          lowerTxt.includes("com quem eu falo")
+        ) {
+          speaker = "ATENDENTE";
+          speakerLabel = "Agente";
+        } else {
+          speaker = parsed.length % 2 === 0 ? "ATENDENTE" : "CLIENTE";
+          speakerLabel = speaker === "ATENDENTE" ? "Agente" : "Cliente";
+        }
       }
 
       parsed.push({
@@ -371,11 +386,21 @@ function AnalystEvaluationFlowInner() {
   const [isSwitchingForm, setIsSwitchingForm] = useState(false);
   const initializedAnalystFormRef = useRef(false);
 
-  // Campos Condicionais SAC / Retenção (Regra de Negócio: Ticket Zendesk + Data do Atendimento + Data da Monitoria)
+  // Campos Condicionais SAC / Retenção (Busca por Ticket sem # + Campos do Atendimento)
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [ticketInput, setTicketInput] = useState("");
   const [dataAtendimentoInput, setDataAtendimentoInput] = useState(todayIso);
   const [dataMonitoriaInput, setDataMonitoriaInput] = useState(todayIso);
+  const [protocoloInput, setProtocoloInput] = useState("");
+  const [telefoneOrigemInput, setTelefoneOrigemInput] = useState("");
+  const [administradoraInput, setAdministradoraInput] = useState("");
+  const [operadoraInput, setOperadoraInput] = useState("");
+  const [situacaoInput, setSituacaoInput] = useState("");
+  const [canalEntradaInput, setCanalEntradaInput] = useState("");
+  const [motivoContatoInput, setMotivoContatoInput] = useState("");
+  const [submotivoPlanoInput, setSubmotivoPlanoInput] = useState("");
+  const [nomeAtendenteInput, setNomeAtendenteInput] = useState("");
+  const lastLookedUpTicketRef = useRef<string>("");
 
   // Campos Padrão (Aquisição / Portabilidade: Telefone + 13 Campos de Venda)
   const [phoneInput, setPhoneInput] = useState("");
@@ -721,6 +746,85 @@ function AnalystEvaluationFlowInner() {
         appliedAny = true;
       }
 
+      // Aplica campos do fluxo de SAC e Retenção quando retornados pelo webhook
+      const pickStr = (...keys: string[]) => {
+        for (const k of keys) {
+          const v = dataMap[k];
+          if (v !== undefined && v !== null && String(v).trim() !== "") {
+            return String(v).trim();
+          }
+        }
+        return "";
+      };
+
+      const incomingTicket = pickStr("ticket_id", "ticket", "Ticket").replace(
+        /#/g,
+        ""
+      );
+      if (incomingTicket) {
+        setTicketInput(incomingTicket);
+        appliedAny = true;
+      }
+      const incomingProtocolo = pickStr("protocolo", "Protocolo");
+      if (incomingProtocolo) {
+        setProtocoloInput(incomingProtocolo);
+        appliedAny = true;
+      }
+      const incomingNome = pickStr("nome_completo", "Nome", "nome");
+      if (incomingNome) {
+        setCustomerNameInput(incomingNome);
+        appliedAny = true;
+      }
+      const incomingCpf = pickStr("cpf", "CPF");
+      if (incomingCpf) {
+        setCustomerCpfInput(incomingCpf);
+        appliedAny = true;
+      }
+      const incomingTelOrigem = pickStr(
+        "telefone_origem",
+        "Telefone_Portabilidade",
+        "telefone"
+      );
+      if (incomingTelOrigem) {
+        setTelefoneOrigemInput(incomingTelOrigem);
+        appliedAny = true;
+      }
+      const incomingAdmin = pickStr("administradora");
+      if (incomingAdmin) {
+        setAdministradoraInput(incomingAdmin);
+        appliedAny = true;
+      }
+      const incomingOperadora = pickStr("operadora");
+      if (incomingOperadora) {
+        setOperadoraInput(incomingOperadora);
+        appliedAny = true;
+      }
+      const incomingSituacao = pickStr("situacao");
+      if (incomingSituacao) {
+        setSituacaoInput(incomingSituacao);
+        appliedAny = true;
+      }
+      const incomingCanal = pickStr("canal_de_entrada");
+      if (incomingCanal) {
+        setCanalEntradaInput(incomingCanal);
+        appliedAny = true;
+      }
+      const incomingMotivo = pickStr("motivo_contato");
+      if (incomingMotivo) {
+        setMotivoContatoInput(incomingMotivo);
+        appliedAny = true;
+      }
+      const incomingSubmotivo = pickStr("submotivo_plano");
+      if (incomingSubmotivo) {
+        setSubmotivoPlanoInput(incomingSubmotivo);
+        appliedAny = true;
+      }
+      const incomingAtendente = pickStr("nome_atendente");
+      if (incomingAtendente) {
+        setNomeAtendenteInput(incomingAtendente);
+        appliedAny = true;
+      }
+
       const formatTimestampedLines = (raw: string) =>
         raw
           .split(/\s*;\s*|\n+/)
@@ -949,6 +1053,16 @@ function AnalystEvaluationFlowInner() {
         setTicketInput("");
         setDataAtendimentoInput(todayIso);
         setDataMonitoriaInput(todayIso);
+        setProtocoloInput("");
+        setTelefoneOrigemInput("");
+        setAdministradoraInput("");
+        setOperadoraInput("");
+        setSituacaoInput("");
+        setCanalEntradaInput("");
+        setMotivoContatoInput("");
+        setSubmotivoPlanoInput("");
+        setNomeAtendenteInput("");
+        lastLookedUpTicketRef.current = "";
       }
     },
     [todayIso]
@@ -998,6 +1112,39 @@ function AnalystEvaluationFlowInner() {
     setDueDateInput(cust.dueDate || "");
     setEarlyPortabilityInput(cust.earlyPortability || "");
   }, []);
+
+  const pullTicketFromWebhook = useCallback(
+    async (rawTicket: string, force = false) => {
+      const cleanTicket = rawTicket.replace(/#/g, "").trim();
+      if (cleanTicket.length < 4) return;
+      if (!force && lastLookedUpTicketRef.current === cleanTicket) return;
+
+      lastLookedUpTicketRef.current = cleanTicket;
+      setFlowError(null);
+      setLookupLoading(true);
+      try {
+        const res = await customersApi.triggerWebhookLookup({
+          searchKey: cleanTicket,
+          keyType: "TICKET",
+          analystId,
+        });
+        if (res.rawData && Object.keys(res.rawData).length > 0) {
+          applyAiEvaluationPayload(res.rawData, activeFormForCall);
+        } else if (res.customer) {
+          if (res.customer.name) setCustomerNameInput(res.customer.name);
+          if (res.customer.document) setCustomerCpfInput(res.customer.document);
+          if (res.customer.phone) setTelefoneOrigemInput(res.customer.phone);
+          if (res.customer.protocol) setProtocoloInput(res.customer.protocol);
+        }
+        setWebhookSource(res.source);
+      } catch (err) {
+        setFlowError(extractErrorMessage(err));
+      } finally {
+        setLookupLoading(false);
+      }
+    },
+    [analystId, activeFormForCall, applyAiEvaluationPayload]
+  );
 
   const pullContactFromWebhook = useCallback(
     async (rawPhone: string, force = false) => {
@@ -1053,14 +1200,16 @@ function AnalystEvaluationFlowInner() {
     setFlowError(null);
 
     if (isSacOrRetencao) {
-      if (!ticketInput.trim()) {
+      const cleanTicket = ticketInput.replace(/#/g, "").trim();
+      if (!cleanTicket) {
         setFlowError(
-          "Informe o número do Ticket Zendesk para prosseguir com a avaliação de " +
+          "Informe o número do Ticket (sem #) para prosseguir com a avaliação de " +
             analystSector +
             "."
         );
         return;
       }
+      setTicketInput(cleanTicket);
       if (!dataAtendimentoInput) {
         setFlowError("Informe a Data do Atendimento.");
         return;
@@ -1219,21 +1368,23 @@ function AnalystEvaluationFlowInner() {
       const durationsList = recordings.map((r) => r.durationSeconds || 180);
       const totalDuration = durationsList.reduce((acc, d) => acc + d, 0);
 
+      const cleanTicket = ticketInput.replace(/#/g, "").trim();
+
       const resolvedPhoneKey = isSacOrRetencao
-        ? ticketInput.trim().replace(/^#/, "") || "11999999999"
+        ? extractCleanPhoneDigits(telefoneOrigemInput) ||
+          cleanTicket ||
+          "11999999999"
         : extractCleanPhoneDigits(phoneInput) ||
           phoneInput ||
           customerInfo?.phone ||
           "11999999999";
 
       const resolvedCustomerName = isSacOrRetencao
-        ? `Ticket #${ticketInput.trim().replace(/^#/, "")}`
+        ? customerNameInput.trim() || `Ticket ${cleanTicket}`
         : customerNameInput;
 
       const resolvedCampaign = isSacOrRetencao
-        ? `${analystSector} • Ticket #${ticketInput
-            .trim()
-            .replace(/^#/, "")}`
+        ? `${analystSector} • Ticket ${cleanTicket}`
         : `${analystSector} • Portabilidade`;
 
       return callsApi.uploadRecording({
@@ -1245,7 +1396,7 @@ function AnalystEvaluationFlowInner() {
         campaign: resolvedCampaign,
         durationSeconds: totalDuration,
         durations: durationsList,
-        ticket: isSacOrRetencao ? ticketInput.trim() : undefined,
+        ticket: isSacOrRetencao ? cleanTicket : undefined,
         attendanceDate: isSacOrRetencao ? dataAtendimentoInput : undefined,
         monitoringDate: isSacOrRetencao ? dataMonitoriaInput : undefined,
         sector: analystSector,
@@ -1544,79 +1695,259 @@ function AnalystEvaluationFlowInner() {
                       </h2>
                     </div>
 
-                    {!isSacOrRetencao &&
-                      (lookupLoading ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300">
-                          <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
-                          <span>Consultando...</span>
-                        </span>
-                      ) : webhookSource ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
-                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                          <span>Sincronizado</span>
-                        </span>
-                      ) : null)}
+                    {lookupLoading ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300">
+                        <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
+                        <span>Consultando...</span>
+                      </span>
+                    ) : webhookSource ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
+                        <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                        <span>Sincronizado</span>
+                      </span>
+                    ) : null}
                   </div>
 
                   {isSacOrRetencao ? (
                     /* ==============================================================
-                       MODO SAC & RETENÇÃO: APENAS OS 3 CAMPOS OBRIGATÓRIOS DA REGRA
-                       1. Ticket Zendesk | 2. Data do Atendimento | 3. Data da Monitoria
+                       MODO SAC & RETENÇÃO: BUSCA POR TICKET (SEM #) + DADOS DO TICKET
                        ============================================================== */
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 py-1">
-                      <div>
-                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
-                          Ticket Zendesk *
+                    <>
+                      <div className="space-y-2 pb-3 border-b border-zinc-800/60">
+                        <label className="block text-xs font-medium text-zinc-200">
+                          Ticket (sem #) *
                         </label>
-                        <div className="relative">
-                          <Hash className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3" />
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <div className="relative flex-1">
+                            <Hash className="h-3.5 w-3.5 text-zinc-500 absolute left-3.5 top-3" />
+                            <input
+                              type="text"
+                              required
+                              value={ticketInput}
+                              onChange={(e) =>
+                                setTicketInput(
+                                  e.target.value.replace(/#/g, "").trimStart()
+                                )
+                              }
+                              placeholder="Digite o Ticket sem # (Ex: 14693287)"
+                              className="w-full h-10 pl-9 pr-4 rounded-lg border border-zinc-800 bg-[#121215] text-sm font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            disabled={lookupLoading}
+                            onClick={() =>
+                              pullTicketFromWebhook(ticketInput, true)
+                            }
+                            className="h-10 px-3.5 rounded-lg border border-zinc-800 bg-[#121215] hover:bg-zinc-900 text-xs font-medium text-zinc-200 inline-flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+                          >
+                            <RefreshCw
+                              className={`h-3.5 w-3.5 ${
+                                lookupLoading ? "animate-spin" : ""
+                              }`}
+                            />
+                            <span>Puxar pelo Ticket</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Data do Atendimento *
+                          </label>
+                          <div className="relative">
+                            <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-2.5 pointer-events-none" />
+                            <input
+                              type="date"
+                              required
+                              value={dataAtendimentoInput}
+                              onChange={(e) =>
+                                setDataAtendimentoInput(e.target.value)
+                              }
+                              className="w-full h-9 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Data da Monitoria *
+                          </label>
+                          <div className="relative">
+                            <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-2.5 pointer-events-none" />
+                            <input
+                              type="date"
+                              required
+                              value={dataMonitoriaInput}
+                              onChange={(e) =>
+                                setDataMonitoriaInput(e.target.value)
+                              }
+                              className="w-full h-9 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Protocolo (protocolo)
+                          </label>
                           <input
                             type="text"
-                            required
-                            value={ticketInput}
-                            onChange={(e) => setTicketInput(e.target.value)}
-                            placeholder="Ex: 14705710"
-                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            value={protocoloInput}
+                            onChange={(e) => setProtocoloInput(e.target.value)}
+                            placeholder="Ex: 41742420261028258548"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
                           />
                         </div>
-                      </div>
 
-                      <div>
-                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
-                          Data do Atendimento *
-                        </label>
-                        <div className="relative">
-                          <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3 pointer-events-none" />
+                        <div className="sm:col-span-2">
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Nome Completo (nome_completo)
+                          </label>
                           <input
-                            type="date"
-                            required
-                            value={dataAtendimentoInput}
+                            type="text"
+                            value={customerNameInput}
                             onChange={(e) =>
-                              setDataAtendimentoInput(e.target.value)
+                              setCustomerNameInput(e.target.value)
                             }
-                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            placeholder="Ex: ROMUALDO ADRIANO SILVA"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
                           />
                         </div>
-                      </div>
 
-                      <div>
-                        <label className="block text-xs font-medium text-zinc-200 mb-1.5">
-                          Data da Monitoria *
-                        </label>
-                        <div className="relative">
-                          <Calendar className="h-3.5 w-3.5 text-zinc-500 absolute left-3 top-3 pointer-events-none" />
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            CPF (cpf)
+                          </label>
                           <input
-                            type="date"
-                            required
-                            value={dataMonitoriaInput}
+                            type="text"
+                            value={customerCpfInput}
                             onChange={(e) =>
-                              setDataMonitoriaInput(e.target.value)
+                              setCustomerCpfInput(e.target.value)
                             }
-                            className="w-full h-10 pl-8 pr-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                            placeholder="Ex: 70711275653"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Telefone de Origem (telefone_origem)
+                          </label>
+                          <input
+                            type="text"
+                            value={telefoneOrigemInput}
+                            onChange={(e) =>
+                              setTelefoneOrigemInput(e.target.value)
+                            }
+                            placeholder="Ex: 31996529191"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Administradora (administradora)
+                          </label>
+                          <input
+                            type="text"
+                            value={administradoraInput}
+                            onChange={(e) =>
+                              setAdministradoraInput(e.target.value)
+                            }
+                            placeholder="Ex: AFFIX - BENEFICIOS"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Operadora (operadora)
+                          </label>
+                          <input
+                            type="text"
+                            value={operadoraInput}
+                            onChange={(e) => setOperadoraInput(e.target.value)}
+                            placeholder="Ex: HAPVIDA"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Situação (situacao)
+                          </label>
+                          <input
+                            type="text"
+                            value={situacaoInput}
+                            onChange={(e) => setSituacaoInput(e.target.value)}
+                            placeholder="Ex: ATIVO"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Canal de Entrada (canal_de_entrada)
+                          </label>
+                          <input
+                            type="text"
+                            value={canalEntradaInput}
+                            onChange={(e) =>
+                              setCanalEntradaInput(e.target.value)
+                            }
+                            placeholder="Ex: Telefone"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Motivo do Contato (motivo_contato)
+                          </label>
+                          <input
+                            type="text"
+                            value={motivoContatoInput}
+                            onChange={(e) =>
+                              setMotivoContatoInput(e.target.value)
+                            }
+                            placeholder="Ex: Plano"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Submotivo do Plano (submotivo_plano)
+                          </label>
+                          <input
+                            type="text"
+                            value={submotivoPlanoInput}
+                            onChange={(e) =>
+                              setSubmotivoPlanoInput(e.target.value)
+                            }
+                            placeholder="Ex: Coparticipação"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                            Nome do Atendente no Ticket (nome_atendente)
+                          </label>
+                          <input
+                            type="text"
+                            value={nomeAtendenteInput}
+                            onChange={(e) =>
+                              setNomeAtendenteInput(e.target.value)
+                            }
+                            placeholder="Ex: Graziela Fernandes"
+                            className="w-full h-9 px-3 rounded-lg border border-zinc-800 bg-[#121215] text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
                           />
                         </div>
                       </div>
-                    </div>
+                    </>
                   ) : (
                     /* ==============================================================
                        MODO AQUISIÇÃO / DEMAIS SETORES: TELEFONE + 13 CAMPOS DO CLIENTE
@@ -1884,7 +2215,7 @@ function AnalystEvaluationFlowInner() {
                         Ticket Zendesk
                       </span>
                       <span className="font-mono text-zinc-100 font-semibold truncate block">
-                        #{ticketInput.replace(/^#/, "")}
+                        {ticketInput.replace(/#/g, "").trim()}
                       </span>
                     </div>
                     <div>
@@ -2840,8 +3171,54 @@ function AnalystEvaluationFlowInner() {
                             {(isSacOrRetencao
                               ? [
                                   {
-                                    key: "ticket_zendesk",
-                                    val: `#${ticketInput.replace(/^#/, "")}`,
+                                    key: "ticket_id",
+                                    val:
+                                      ticketInput.replace(/#/g, "").trim() ||
+                                      "-",
+                                  },
+                                  {
+                                    key: "protocolo",
+                                    val: protocoloInput || "-",
+                                  },
+                                  {
+                                    key: "nome_completo",
+                                    val: customerNameInput || "-",
+                                  },
+                                  {
+                                    key: "cpf",
+                                    val: customerCpfInput || "-",
+                                  },
+                                  {
+                                    key: "telefone_origem",
+                                    val: telefoneOrigemInput || "-",
+                                  },
+                                  {
+                                    key: "administradora",
+                                    val: administradoraInput || "-",
+                                  },
+                                  {
+                                    key: "operadora",
+                                    val: operadoraInput || "-",
+                                  },
+                                  {
+                                    key: "situacao",
+                                    val: situacaoInput || "-",
+                                  },
+                                  {
+                                    key: "canal_de_entrada",
+                                    val: canalEntradaInput || "-",
+                                  },
+                                  {
+                                    key: "motivo_contato",
+                                    val: motivoContatoInput || "-",
+                                  },
+                                  {
+                                    key: "submotivo_plano",
+                                    val: submotivoPlanoInput || "-",
+                                  },
+                                  {
+                                    key: "nome_atendente",
+                                    val: nomeAtendenteInput || "-",
                                   },
                                   {
                                     key: "data_atendimento",
@@ -2850,10 +3227,6 @@ function AnalystEvaluationFlowInner() {
                                   {
                                     key: "data_monitoria",
                                     val: dataMonitoriaInput || "-",
-                                  },
-                                  {
-                                    key: "external_call_id",
-                                    val: selectedCall.externalCallId,
                                   },
                                 ]
                               : [

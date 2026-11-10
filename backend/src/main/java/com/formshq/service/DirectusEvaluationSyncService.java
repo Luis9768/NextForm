@@ -889,9 +889,26 @@ public class DirectusEvaluationSyncService {
                     metadata.put("returnAudioFileId", returnAudioUuid);
                     metadata.putIfAbsent("returnAudioUrl", "/api/v1/audio/directus/" + returnAudioUuid);
                 }
-                String ticket = extractString(item, "Ticket", null);
+                String ticket = firstNonBlank(
+                        extractString(item, "Ticket", null),
+                        extractString(item, "ticket_id", null),
+                        extractString(item, "ticket", null)
+                );
                 if (ticket != null) {
-                    metadata.put("ticket", ticket);
+                    String cleanTicket = ticket.replace("#", "").trim();
+                    metadata.put("ticket", cleanTicket);
+                    metadata.put("ticket_id", cleanTicket);
+                }
+                List<String> sacExtraKeys = List.of(
+                        "protocolo", "nome_completo", "cpf", "telefone_origem",
+                        "administradora", "operadora", "situacao", "canal_de_entrada",
+                        "motivo_contato", "submotivo_plano", "nome_atendente"
+                );
+                for (String sacKey : sacExtraKeys) {
+                    String sacVal = extractString(item, sacKey, null);
+                    if (sacVal != null) {
+                        metadata.put(sacKey, sacVal);
+                    }
                 }
                 String transcricao = firstNonBlank(
                         extractString(item, "Transcricao", null),
@@ -919,7 +936,8 @@ public class DirectusEvaluationSyncService {
 
                 if (existingCallOpt.isPresent()) {
                     CallRecord existingCall = existingCallOpt.get();
-                    if (item.get("Operador") != null || transcricao != null) {
+                    if ((targetOverride == null || existingCall.getAnalyst() == null)
+                            && (item.get("Operador") != null || transcricao != null)) {
                         existingCall.setAnalyst(analyst);
                     }
                     existingCall.setCustomer(customer);
@@ -933,8 +951,21 @@ public class DirectusEvaluationSyncService {
                     if (currentAudioUrl == null || !currentAudioUrl.contains("/api/v1/audio/files/")) {
                         existingCall.setAudioUrl(audioUrl);
                     }
-                    existingCall.setStatus(CallStatus.AVALIADA);
                     existingCall.setMetadata(metadata);
+
+                    boolean hasEvaluationScoresInPayload = item.get("Nota_final") != null
+                            || item.get("Nota_Final") != null
+                            || item.get("Observacoes") != null
+                            || hasAnyExplicitCriterionValue(item, template.getItems());
+
+                    if (!hasEvaluationScoresInPayload && "upload-manual".equals(existingCall.getChannel()) && existingCall.getEvaluation() == null) {
+                        callRecordRepository.save(existingCall);
+                        importedCount++;
+                        importedCodes.add(existingCall.getExternalCallId());
+                        continue;
+                    }
+
+                    existingCall.setStatus(CallStatus.AVALIADA);
 
                     Evaluation freshEval = buildEvaluationEntity(
                             collection,
@@ -1654,13 +1685,49 @@ public class DirectusEvaluationSyncService {
                 });
     }
 
+    private boolean hasAnyExplicitCriterionValue(
+            Map<String, Object> item,
+            List<EvaluationFormItem> templateItems
+    ) {
+        if (item == null || templateItems == null) {
+            return false;
+        }
+        for (EvaluationFormItem tItem : templateItems) {
+            String key = extractDirectusKeyFromLabel(tItem.getLabel());
+            if (!tItem.isFatalError() && item.containsKey(key) && item.get(key) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private Customer resolveOrProvisionCustomer(String collection, Map<String, Object> item, String directusId) {
-        String rawPhone = extractString(item, "Telefone_Portabilidade", null);
-        String ticket = extractString(item, "Ticket", null);
+        String rawPhone = firstNonBlank(
+                extractString(item, "Telefone_Portabilidade", null),
+                extractString(item, "telefone_origem", null),
+                extractString(item, "telefone", null)
+        );
+        String rawTicket = firstNonBlank(
+                extractString(item, "Ticket", null),
+                extractString(item, "ticket_id", null),
+                extractString(item, "ticket", null)
+        );
+        String ticket = rawTicket != null ? rawTicket.replace("#", "").trim() : null;
         String saleDate = extractString(item, "Data_da_venda", null);
-        String nome = extractString(item, "Nome", null);
-        String cpf = extractString(item, "CPF", null);
-        String proposta = extractString(item, "Proposta", null);
+        String nome = firstNonBlank(
+                extractString(item, "Nome", null),
+                extractString(item, "nome_completo", null),
+                extractString(item, "nome", null)
+        );
+        String cpf = firstNonBlank(
+                extractString(item, "CPF", null),
+                extractString(item, "cpf", null)
+        );
+        String proposta = firstNonBlank(
+                extractString(item, "Proposta", null),
+                extractString(item, "protocolo", null),
+                ticket
+        );
         String nascimento = extractString(item, "Data_de_nascimento", null);
         String nomeMae = extractString(item, "Nome_da_mae", null);
         String email = extractString(item, "Email", null);
@@ -1668,7 +1735,11 @@ public class DirectusEvaluationSyncService {
         String tipoFatura = extractString(item, "Tipo_de_Fatura", null);
         String vencimento = extractString(item, "Vencimento", null);
         String portAntecipada = extractString(item, "Portabilidade_Antecipada", null);
-        String plano = extractString(item, "Plano_Contratado", null);
+        String plano = firstNonBlank(
+                extractString(item, "Plano_Contratado", null),
+                extractString(item, "operadora", null),
+                extractString(item, "administradora", null)
+        );
         String endereco = extractString(item, "Endereco_Completo", null);
 
         String cleanPhone;
@@ -1676,12 +1747,24 @@ public class DirectusEvaluationSyncService {
             cleanPhone = CustomerLookupService.normalizePhone(rawPhone);
         } else if (ticket != null && !ticket.isBlank()) {
             String digits = ticket.replaceAll("\\D", "");
-            cleanPhone = "119" + String.format("%08d", digits.isEmpty() ? directusId.hashCode() & 0xfffffff : Integer.parseInt(digits) % 100000000);
+            long parsedNum = 0L;
+            try {
+                if (!digits.isEmpty()) {
+                    parsedNum = Long.parseLong(digits);
+                }
+            } catch (NumberFormatException ignored) {
+            }
+            cleanPhone = "119" + String.format("%08d", digits.isEmpty() ? (directusId.hashCode() & 0xfffffff) % 100000000 : parsedNum % 100000000L);
         } else {
             cleanPhone = "11988" + String.format("%06d", Math.abs(directusId.hashCode()) % 1000000);
         }
 
-        String protocol = firstNonBlank(proposta, ticket, "DIR-" + collection.toUpperCase() + "-" + directusId);
+        String protocol = firstNonBlank(
+                extractString(item, "protocolo", null),
+                proposta,
+                ticket,
+                "DIR-" + collection.toUpperCase() + "-" + directusId
+        );
 
         String defaultName = rawPhone != null ? "Cliente Portabilidade " + cleanPhone : "Cliente Ticket " + protocol;
         String defaultEmail = "cliente." + cleanPhone + "@directus.com.br";
