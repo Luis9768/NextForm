@@ -140,38 +140,61 @@ html:not(.dark) .shadcn-kpi-card {
 }
 
 /* ==========================================================================
-   MODO CLARO WCAG 2.2 AA/AAA PARA O CONTEÚDO CENTRAL (main)
+   MODO CLARO WCAG 2.2 AA/AAA PARA O CONTEÚDO CENTRAL (main) E MODAIS (.theme-surface)
    (A barra lateral esquerda <aside> permanece escura #070709 / #0d0d10)
    ========================================================================== */
-html:not(.dark) main {
+html:not(.dark) main,
+html:not(.dark) .theme-surface {
   background-color: #f7f7f5 !important;
   color: #18181b !important;
 }
 
-/* Cards e containers principais dentro do main */
+/* Cards e containers principais dentro do main e modais */
 html:not(.dark) main .bg-\[\#0b0b0d\],
 html:not(.dark) main .bg-\[\#0e0e11\],
 html:not(.dark) main .bg-\[\#101013\],
-html:not(.dark) main .bg-zinc-950 {
+html:not(.dark) main .bg-\[\#101014\],
+html:not(.dark) main .bg-zinc-950,
+html:not(.dark) .theme-surface.bg-\[\#0b0b0d\],
+html:not(.dark) .theme-surface .bg-\[\#0b0b0d\],
+html:not(.dark) .theme-surface .bg-\[\#0e0e11\],
+html:not(.dark) .theme-surface .bg-\[\#101013\],
+html:not(.dark) .theme-surface .bg-\[\#101014\],
+html:not(.dark) .theme-surface .bg-zinc-950 {
   background-color: #ffffff !important;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
-/* Inputs, cabeçalhos de tabela, chips e superfícies secundárias */
+/* Inputs, cabeçalhos de tabela, chips, bolhas de conversa e superfícies secundárias */
 html:not(.dark) main .bg-\[\#09090b\],
 html:not(.dark) main .bg-\[\#0a0a0d\],
 html:not(.dark) main .bg-\[\#0d0d10\],
 html:not(.dark) main .bg-\[\#111115\],
 html:not(.dark) main .bg-\[\#121215\],
+html:not(.dark) main .bg-\[\#121216\],
 html:not(.dark) main .bg-\[\#141418\],
 html:not(.dark) main .bg-\[\#15151a\],
 html:not(.dark) main .bg-\[\#16161b\],
 html:not(.dark) main .bg-\[\#18181d\],
 html:not(.dark) main .bg-zinc-900,
+html:not(.dark) main .bg-zinc-900\/80,
 html:not(.dark) main .bg-zinc-900\/70,
 html:not(.dark) main .bg-zinc-900\/60,
+html:not(.dark) main .bg-zinc-900\/50,
+html:not(.dark) main .bg-zinc-900\/40,
+html:not(.dark) main .bg-zinc-900\/35,
+html:not(.dark) main .bg-zinc-900\/30,
 html:not(.dark) main .bg-zinc-800,
-html:not(.dark) main .bg-zinc-800\/90 {
+html:not(.dark) main .bg-zinc-800\/90,
+html:not(.dark) main .bg-zinc-800\/80,
+html:not(.dark) .theme-surface .bg-\[\#09090b\],
+html:not(.dark) .theme-surface .bg-\[\#121215\],
+html:not(.dark) .theme-surface .bg-\[\#121216\],
+html:not(.dark) .theme-surface .bg-\[\#141418\],
+html:not(.dark) .theme-surface .bg-zinc-900,
+html:not(.dark) .theme-surface .bg-zinc-900\/70,
+html:not(.dark) .theme-surface .bg-zinc-900\/60,
+html:not(.dark) .theme-surface .bg-zinc-800 {
   background-color: #f4f4f5 !important;
   color: #18181b !important;
 }
@@ -184,14 +207,31 @@ html:not(.dark) main .border-zinc-800\/70,
 html:not(.dark) main .border-zinc-800\/60,
 html:not(.dark) main .border-zinc-700,
 html:not(.dark) main .border-zinc-700\/80,
-html:not(.dark) main .border-zinc-600 {
+html:not(.dark) main .border-zinc-600,
+html:not(.dark) .theme-surface.border-zinc-800,
+html:not(.dark) .theme-surface .border-zinc-800,
+html:not(.dark) .theme-surface .border-zinc-800\/90,
+html:not(.dark) .theme-surface .border-zinc-800\/80,
+html:not(.dark) .theme-surface .border-zinc-800\/70,
+html:not(.dark) .theme-surface .border-zinc-800\/60,
+html:not(.dark) .theme-surface .border-zinc-700,
+html:not(.dark) .theme-surface .border-zinc-600 {
   border-color: #e4e4e7 !important;
+}
+
+/* Aba ativa com underline escuro no modo claro */
+html:not(.dark) main .border-b-2.border-zinc-100 {
+  border-bottom-color: #18181b !important;
 }
 
 html:not(.dark) main .divide-zinc-800 > :not([hidden]) ~ :not([hidden]),
 html:not(.dark) main .divide-zinc-800\/80 > :not([hidden]) ~ :not([hidden]),
 html:not(.dark) main .divide-zinc-800\/70 > :not([hidden]) ~ :not([hidden]),
-html:not(.dark) main .divide-zinc-800\/60 > :not([hidden]) ~ :not([hidden]) {
+html:not(.dark) main .divide-zinc-800\/60 > :not([hidden]) ~ :not([hidden]),
+html:not(.dark) main .divide-zinc-800\/50 > :not([hidden]) ~ :not([hidden]),
+html:not(.dark) .theme-surface .divide-zinc-800 > :not([hidden]) ~ :not([hidden]),
+html:not(.dark) .theme-surface .divide-zinc-800\/70 > :not([hidden]) ~ :not([hidden]),
+html:not(.dark) .theme-surface .divide-zinc-800\/60 > :not([hidden]) ~ :not([hidden]) {
   border-color: #e4e4e7 !important;
 }
 
@@ -199,73 +239,104 @@ html:not(.dark) main .divide-zinc-800\/60 > :not([hidden]) ~ :not([hidden]) {
 html:not(.dark) main .text-zinc-50,
 html:not(.dark) main .text-zinc-100,
 html:not(.dark) main .text-zinc-200,
-html:not(.dark) main .text-white {
+html:not(.dark) main .text-white,
+html:not(.dark) .theme-surface .text-zinc-50,
+html:not(.dark) .theme-surface .text-zinc-100,
+html:not(.dark) .theme-surface .text-zinc-200,
+html:not(.dark) .theme-surface .text-white {
   color: #18181b !important;
 }
 
 html:not(.dark) main .text-zinc-300,
-html:not(.dark) main .text-zinc-400 {
+html:not(.dark) main .text-zinc-400,
+html:not(.dark) .theme-surface .text-zinc-300,
+html:not(.dark) .theme-surface .text-zinc-400 {
   color: #52525b !important;
 }
 
 html:not(.dark) main .text-zinc-500,
-html:not(.dark) main .text-zinc-600 {
+html:not(.dark) main .text-zinc-600,
+html:not(.dark) .theme-surface .text-zinc-500,
+html:not(.dark) .theme-surface .text-zinc-600 {
   color: #71717a !important;
 }
 
-/* Botões primários (CTA) e abas ativas dentro do main no modo claro */
-html:not(.dark) main .bg-zinc-100.text-zinc-950 {
+/* Botões primários (CTA) e abas ativas dentro do main e modais no modo claro */
+html:not(.dark) main .bg-zinc-100.text-zinc-950,
+html:not(.dark) .theme-surface .bg-zinc-100.text-zinc-950 {
   background-color: #18181b !important;
   color: #fafafa !important;
 }
 
-html:not(.dark) main .bg-zinc-100.text-zinc-950:hover {
+html:not(.dark) main .bg-zinc-100.text-zinc-950:hover,
+html:not(.dark) .theme-surface .bg-zinc-100.text-zinc-950:hover {
   background-color: #27272a !important;
   color: #ffffff !important;
 }
 
+/* Barras da onda sonora (Waveform) no modo claro */
+html:not(.dark) main .bg-zinc-200 {
+  background-color: #18181b !important;
+}
+
 /* Hover de linhas de tabela e listas no modo claro */
 html:not(.dark) main .hover\:bg-zinc-900:hover,
+html:not(.dark) main .hover\:bg-zinc-900\/70:hover,
+html:not(.dark) main .hover\:bg-zinc-900\/60:hover,
+html:not(.dark) main .hover\:bg-zinc-900\/50:hover,
 html:not(.dark) main .hover\:bg-zinc-900\/40:hover,
 html:not(.dark) main .hover\:bg-zinc-900\/35:hover,
-html:not(.dark) main .hover\:bg-zinc-900\/60:hover,
-html:not(.dark) main .hover\:bg-zinc-800:hover {
+html:not(.dark) main .hover\:bg-zinc-800:hover,
+html:not(.dark) .theme-surface .hover\:bg-zinc-900\/70:hover,
+html:not(.dark) .theme-surface .hover\:bg-zinc-800:hover {
   background-color: #f4f4f5 !important;
 }
 
 /* Badges semânticos pastel com contraste WCAG AA no modo claro */
-html:not(.dark) main [class*="bg-emerald-950"] {
+html:not(.dark) main [class*="bg-emerald-950"],
+html:not(.dark) .theme-surface [class*="bg-emerald-950"] {
   background-color: #ecfdf5 !important;
   border-color: #a7f3d0 !important;
   color: #065f46 !important;
 }
 html:not(.dark) main .text-emerald-300,
-html:not(.dark) main .text-emerald-400 {
+html:not(.dark) main .text-emerald-400,
+html:not(.dark) .theme-surface .text-emerald-300,
+html:not(.dark) .theme-surface .text-emerald-400 {
   color: #047857 !important;
 }
 
-html:not(.dark) main [class*="bg-amber-950"] {
+html:not(.dark) main [class*="bg-amber-950"],
+html:not(.dark) .theme-surface [class*="bg-amber-950"] {
   background-color: #fffbeb !important;
   border-color: #fde68a !important;
   color: #92400e !important;
 }
+html:not(.dark) main .text-amber-200\/90,
 html:not(.dark) main .text-amber-300,
-html:not(.dark) main .text-amber-400 {
+html:not(.dark) main .text-amber-400,
+html:not(.dark) .theme-surface .text-amber-300,
+html:not(.dark) .theme-surface .text-amber-400 {
   color: #b45309 !important;
 }
 
-html:not(.dark) main [class*="bg-red-950"] {
+html:not(.dark) main [class*="bg-red-950"],
+html:not(.dark) .theme-surface [class*="bg-red-950"] {
   background-color: #fef2f2 !important;
   border-color: #fecaca !important;
   color: #991b1b !important;
 }
 html:not(.dark) main .text-red-200,
 html:not(.dark) main .text-red-300,
-html:not(.dark) main .text-red-400 {
+html:not(.dark) main .text-red-400,
+html:not(.dark) .theme-surface .text-red-200,
+html:not(.dark) .theme-surface .text-red-300,
+html:not(.dark) .theme-surface .text-red-400 {
   color: #b91c1c !important;
 }
 
-html:not(.dark) main [class*="bg-sky-950"] {
+html:not(.dark) main [class*="bg-sky-950"],
+html:not(.dark) .theme-surface [class*="bg-sky-950"] {
   background-color: #f0f9ff !important;
   border-color: #bae6fd !important;
   color: #075985 !important;

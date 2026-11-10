@@ -62,7 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (response.user.mustChangePassword) {
       router.push("/first-access");
     } else if (response.user.role === "ROLE_ANALISTA") {
-      router.push("/my-evaluations");
+      router.push("/dashboard");
     } else {
       router.push("/dashboard");
     }

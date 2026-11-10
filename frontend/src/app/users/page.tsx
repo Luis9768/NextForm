@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   Database,
+  Eye,
+  EyeOff,
   KeyRound,
   Plus,
   Power,
@@ -64,6 +66,8 @@ export default function UsersManagementPage() {
     useState<UserSummary | null>(null);
   const [targetNewPassword, setTargetNewPassword] = useState("");
   const [targetConfirmPassword, setTargetConfirmPassword] = useState("");
+  const [showTargetPassword, setShowTargetPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [forceChangeNextLogin, setForceChangeNextLogin] = useState(false);
 
   const { data: users = [], isLoading } = useQuery({
@@ -590,25 +594,61 @@ export default function UsersManagementPage() {
                       : "Redefinir para 1º Acesso"}
                   </button>
                 </div>
-                <input
-                  type="password"
-                  value={targetNewPassword}
-                  onChange={(e) => setTargetNewPassword(e.target.value)}
-                  placeholder="Digite a nova senha..."
-                  className="w-full h-9 px-3 rounded-md border border-zinc-800 bg-[#09090b] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                />
+                <div className="relative">
+                  <input
+                    type={showTargetPassword ? "text" : "password"}
+                    value={targetNewPassword}
+                    onChange={(e) => setTargetNewPassword(e.target.value)}
+                    placeholder="Digite a nova senha..."
+                    className="w-full h-9 pl-3 pr-9 rounded-md border border-zinc-800 bg-[#09090b] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={
+                      showTargetPassword ? "Ocultar senha" : "Ver senha"
+                    }
+                    onClick={() => setShowTargetPassword((v) => !v)}
+                    className="absolute right-2.5 top-2 text-zinc-400 hover:text-zinc-100 transition-colors"
+                  >
+                    {showTargetPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
 
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">
                     Confirmar Senha *
                   </label>
-                  <input
-                    type="password"
-                    value={targetConfirmPassword}
-                    onChange={(e) => setTargetConfirmPassword(e.target.value)}
-                    placeholder="Repita a nova senha..."
-                    className="w-full h-9 px-3 rounded-md border border-zinc-800 bg-[#09090b] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      value={targetConfirmPassword}
+                      onChange={(e) => setTargetConfirmPassword(e.target.value)}
+                      placeholder="Repita a nova senha..."
+                      className="w-full h-9 pl-3 pr-9 rounded-md border border-zinc-800 bg-[#09090b] text-xs text-zinc-100 focus:outline-none focus:border-zinc-600"
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      aria-label={
+                        showConfirmPassword
+                          ? "Ocultar confirmação de senha"
+                          : "Ver confirmação de senha"
+                      }
+                      onClick={() => setShowConfirmPassword((v) => !v)}
+                      className="absolute right-2.5 top-2 text-zinc-400 hover:text-zinc-100 transition-colors"
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 <label className="flex items-center gap-2 pt-1 cursor-pointer">

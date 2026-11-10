@@ -806,7 +806,10 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <header
             className={cn(
               "h-14 px-3 sm:px-6 border-b border-zinc-200 dark:border-zinc-800/80 items-center justify-between gap-2 sm:gap-4 shrink-0 bg-white/95 dark:bg-[#0b0b0d]/95 backdrop-blur z-20",
-              pathname.startsWith("/analysts/") ? "flex md:hidden" : "flex"
+              pathname.startsWith("/analysts/") ||
+                pathname.startsWith("/evaluations/")
+                ? "flex md:hidden"
+                : "flex"
             )}
           >
             <div className="flex items-center gap-2.5 min-w-0">
@@ -958,15 +961,17 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
           <main
             className={cn(
               "flex-1 bg-zinc-50/40 dark:bg-[#0b0b0d]",
-              pathname.startsWith("/analysts/")
-                ? "overflow-hidden p-0 flex flex-col min-h-0"
+              pathname.startsWith("/analysts/") ||
+                pathname.startsWith("/evaluations/")
+                ? "studio-dark-canvas overflow-hidden p-0 flex flex-col min-h-0"
                 : "overflow-y-auto p-3.5 sm:p-6"
             )}
           >
             <div
               className={cn(
                 "mx-auto w-full",
-                pathname.startsWith("/analysts/")
+                pathname.startsWith("/analysts/") ||
+                  pathname.startsWith("/evaluations/")
                   ? "flex-1 flex flex-col min-h-0"
                   : "max-w-7xl"
               )}

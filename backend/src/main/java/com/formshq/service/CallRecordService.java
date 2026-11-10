@@ -484,17 +484,20 @@ public class CallRecordService {
                 payload.put("Audio_Ligacao_Retorno", directusReturnId);
                 payload.put("audio_chamada_retorno", directusReturnId);
             }
-            String cleanTicket = initialMeta.getOrDefault("ticket", customer.getProtocol() != null ? customer.getProtocol() : "")
-                    .toString()
-                    .replace("#", "")
-                    .trim();
+            Object rawTicketMeta = initialMeta.get("ticket");
+            String cleanTicket = rawTicketMeta != null
+                    ? rawTicketMeta.toString().replace("#", "").trim()
+                    : "";
             String sectorStr = initialMeta.getOrDefault("sector", analyst.getDepartment() != null ? analyst.getDepartment() : "")
                     .toString();
             String lowerSector = sectorStr.toLowerCase();
-            boolean isSacOrRetencao = lowerSector.contains("sac")
-                    || lowerSector.contains("reten")
-                    || lowerSector.contains("cobran")
-                    || (!cleanTicket.isEmpty() && !cleanTicket.startsWith("DIR-"));
+            boolean isAquisicao = lowerSector.contains("aquisi") || lowerSector.contains("portabilidade");
+            boolean isSacOrRetencao = !isAquisicao && (
+                    lowerSector.contains("sac")
+                            || lowerSector.contains("reten")
+                            || lowerSector.contains("cobran")
+                            || !cleanTicket.isEmpty()
+            );
 
             payload.put("audioUrl", reachableAudioUrl);
             payload.put("audiUrl", presignedR2Url != null ? presignedR2Url : reachableAudioUrl);
@@ -524,9 +527,13 @@ public class CallRecordService {
             String responseBody = null;
             String lastErrorMsg = null;
 
-            String effectiveWebhookBaseUrl = (isSacOrRetencao && sacRetencaoWebhookUrl != null && !sacRetencaoWebhookUrl.isBlank())
-                    ? sacRetencaoWebhookUrl.trim()
+            String effectiveWebhookBaseUrl = isSacOrRetencao
+                    ? sacTargetUrl
                     : targetUrl;
+
+            if (effectiveWebhookBaseUrl.isEmpty()) {
+                return;
+            }
 
             // Tenta primeiro a URL de produção (/webhook/...) e, se 404 (modo de teste no n8n), tenta /webhook-test/...
             List<String> candidateUrls = new java.util.ArrayList<>();

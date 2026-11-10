@@ -7,6 +7,8 @@ import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
+  Eye,
+  EyeOff,
   KeyRound,
   Lock,
   LogOut,
@@ -21,6 +23,8 @@ export default function FirstAccessPasswordPage() {
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -44,11 +48,7 @@ export default function FirstAccessPasswordPage() {
         confirmPassword: confirmPassword.trim(),
       });
       updateCurrentUser(updatedUser);
-      if (updatedUser.role === "ROLE_ANALISTA") {
-        router.replace("/my-evaluations");
-      } else {
-        router.replace("/dashboard");
-      }
+      router.replace("/dashboard");
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
@@ -106,14 +106,27 @@ export default function FirstAccessPasswordPage() {
             <div className="relative">
               <Lock className="h-4 w-4 text-zinc-500 absolute left-3.5 top-2.5" />
               <input
-                type="password"
+                type={showNewPassword ? "text" : "password"}
                 required
                 minLength={6}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Digite sua nova senha pessoal..."
-                className="w-full h-9 pl-10 pr-4 bg-[#121215] border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+                className="w-full h-9 pl-10 pr-9 bg-[#121215] border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
               />
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={showNewPassword ? "Ocultar senha" : "Ver senha"}
+                onClick={() => setShowNewPassword((v) => !v)}
+                className="absolute right-2.5 top-2.5 text-zinc-400 hover:text-zinc-100 transition-colors"
+              >
+                {showNewPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
             </div>
           </div>
 
@@ -124,14 +137,31 @@ export default function FirstAccessPasswordPage() {
             <div className="relative">
               <CheckCircle2 className="h-4 w-4 text-zinc-500 absolute left-3.5 top-2.5" />
               <input
-                type="password"
+                type={showConfirmPassword ? "text" : "password"}
                 required
                 minLength={6}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Repita a nova senha..."
-                className="w-full h-9 pl-10 pr-4 bg-[#121215] border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+                className="w-full h-9 pl-10 pr-9 bg-[#121215] border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
               />
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={
+                  showConfirmPassword
+                    ? "Ocultar confirmação de senha"
+                    : "Ver confirmação de senha"
+                }
+                onClick={() => setShowConfirmPassword((v) => !v)}
+                className="absolute right-2.5 top-2.5 text-zinc-400 hover:text-zinc-100 transition-colors"
+              >
+                {showConfirmPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
             </div>
           </div>
 

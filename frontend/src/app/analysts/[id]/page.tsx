@@ -1002,7 +1002,7 @@ function AnalystEvaluationFlowInner() {
     activeFormForCall,
     applyAiEvaluationPayload,
   ]);
-  const isSacOrRetencao = useMemo(() => {
+  const effectiveEvaluationSector = useMemo(() => {
     const formContext = `${activeFormForCall?.sector || ""} ${
       activeFormForCall?.name || ""
     }`.toLowerCase();
@@ -1010,23 +1010,29 @@ function AnalystEvaluationFlowInner() {
       formContext.includes("portabilidade") ||
       formContext.includes("aquisi")
     ) {
+      return "Aquisição";
+    }
+    if (formContext.includes("reten") || formContext.includes("cobran")) {
+      return "Cobrança & Retenção";
+    }
+    if (formContext.includes("sac")) {
+      return "SAC";
+    }
+    return analystSector;
+  }, [activeFormForCall, analystSector]);
+
+  const isSacOrRetencao = useMemo(() => {
+    const s = effectiveEvaluationSector.toLowerCase();
+    if (s.includes("portabilidade") || s.includes("aquisi")) {
       return false;
     }
-    if (
-      formContext.includes("sac") ||
-      formContext.includes("reten") ||
-      formContext.includes("cobran")
-    ) {
-      return true;
-    }
-    const s = analystSector.toLowerCase();
     return (
       s.includes("sac") ||
       s.includes("reten") ||
       s.includes("cobran") ||
       s.includes("suporte")
     );
-  }, [activeFormForCall, analystSector]);
+  }, [effectiveEvaluationSector]);
 
   const resetCustomerFieldsForModeSwitch = useCallback(
     (nextIsSacRet: boolean) => {
@@ -1384,8 +1390,8 @@ function AnalystEvaluationFlowInner() {
         : customerNameInput;
 
       const resolvedCampaign = isSacOrRetencao
-        ? `${analystSector} • Ticket ${cleanTicket}`
-        : `${analystSector} • Portabilidade`;
+        ? `${effectiveEvaluationSector} • Ticket ${cleanTicket}`
+        : `${effectiveEvaluationSector} • Portabilidade`;
 
       return callsApi.uploadRecording({
         files: validFiles,
@@ -1399,7 +1405,7 @@ function AnalystEvaluationFlowInner() {
         ticket: isSacOrRetencao ? cleanTicket : undefined,
         attendanceDate: isSacOrRetencao ? dataAtendimentoInput : undefined,
         monitoringDate: isSacOrRetencao ? dataMonitoriaInput : undefined,
-        sector: analystSector,
+        sector: effectiveEvaluationSector,
         formTemplateId: activeFormForCall?.id,
       });
     },
