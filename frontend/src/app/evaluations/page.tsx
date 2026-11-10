@@ -11,12 +11,14 @@ import {
   Database,
   Eye,
   Headphones,
+  Pencil,
   RefreshCw,
   Search,
   X,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
+import { EditEvaluationScoreModal } from "@/components/evaluations/EditEvaluationScoreModal";
 import { TablePagination } from "@/components/ui/TablePagination";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -45,6 +47,9 @@ export default function EvaluationsListPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [playingEvalId, setPlayingEvalId] = useState<string | null>(null);
+  const [editingEvaluationId, setEditingEvaluationId] = useState<string | null>(
+    null
+  );
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
 
@@ -277,7 +282,7 @@ export default function EvaluationsListPage() {
         {/* Tabela de Avaliações Alinhada em Grid (Zero Desalinhamento entre Linhas) */}
         <div className="rounded-xl border border-zinc-800/80 bg-[#0e0e11] divide-y divide-zinc-800/60 overflow-hidden">
           {/* Cabeçalho de Colunas (Desktop) */}
-          <div className="hidden lg:grid lg:grid-cols-[176px_minmax(0,1.45fr)_minmax(0,1.25fr)_96px_138px_56px_168px] lg:items-center lg:gap-3 px-5 py-2.5 bg-[#09090b] text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+          <div className="hidden lg:grid lg:grid-cols-[176px_minmax(0,1.45fr)_minmax(0,1.25fr)_96px_138px_56px_248px] lg:items-center lg:gap-3 px-5 py-2.5 bg-[#09090b] text-[10px] font-mono uppercase tracking-wider text-zinc-500">
             <span>Código / ID</span>
             <span>Operador & Setor</span>
             <span>Matriz & Data</span>
@@ -313,7 +318,7 @@ export default function EvaluationsListPage() {
 
               return (
                 <div key={ev.id} className="divide-y divide-zinc-800/50">
-                  <div className="p-4 sm:px-5 sm:py-3 hover:bg-zinc-900/35 transition-colors flex flex-col lg:grid lg:grid-cols-[176px_minmax(0,1.45fr)_minmax(0,1.25fr)_96px_138px_56px_168px] lg:items-center gap-3">
+                  <div className="p-4 sm:px-5 sm:py-3 hover:bg-zinc-900/35 transition-colors flex flex-col lg:grid lg:grid-cols-[176px_minmax(0,1.45fr)_minmax(0,1.25fr)_96px_138px_56px_248px] lg:items-center gap-3">
                     {/* Coluna 1: Código / Protocolo com Largura Fixa */}
                     <div className="min-w-0">
                       <span
@@ -397,6 +402,18 @@ export default function EvaluationsListPage() {
                         <Headphones className="h-3.5 w-3.5" />
                         <span>{isPlaying ? "Ocultar" : "Ouvir"}</span>
                       </button>
+
+                      {isGestor && (
+                        <button
+                          type="button"
+                          onClick={() => setEditingEvaluationId(ev.id)}
+                          title="Editar nota da avaliação"
+                          className="h-8 px-2.5 rounded-md border border-zinc-800 bg-[#141418] hover:bg-zinc-800 text-xs font-medium text-zinc-200 inline-flex items-center gap-1.5 transition-colors"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          <span>Editar</span>
+                        </button>
+                      )}
 
                       <Link
                         href={`/evaluations/${ev.id}`}
@@ -626,6 +643,10 @@ export default function EvaluationsListPage() {
             </motion.div>
           )}
         </AnimatePresence>
+        <EditEvaluationScoreModal
+          evaluationId={editingEvaluationId}
+          onClose={() => setEditingEvaluationId(null)}
+        />
       </div>
     </AppShell>
   );

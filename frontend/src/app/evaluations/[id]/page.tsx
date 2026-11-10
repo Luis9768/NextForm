@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Lock,
   MessageSquareQuote,
+  Pencil,
   PhoneCall,
   ShieldAlert,
   User,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { CallAudioPlayer } from "@/components/audio/CallAudioPlayer";
+import { EditEvaluationScoreModal } from "@/components/evaluations/EditEvaluationScoreModal";
 import { useAuth } from "@/context/AuthContext";
 import { evaluationsApi, extractErrorMessage } from "@/lib/api";
 import {
@@ -28,10 +30,11 @@ export default function EvaluationDetailPage() {
   const params = useParams<{ id: string }>();
   const evalId = params.id;
   const router = useRouter();
-  const { isAnalista } = useAuth();
+  const { isAnalista, isGestor } = useAuth();
   const [detectedAudioDuration, setDetectedAudioDuration] = React.useState<
     number | null
   >(null);
+  const [isEditingModalOpen, setIsEditingModalOpen] = React.useState(false);
 
   const {
     data: evaluation,
@@ -89,14 +92,26 @@ export default function EvaluationDetailPage() {
             <span>Voltar</span>
           </button>
 
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-800 bg-[#101013] text-zinc-400 text-xs font-mono">
-            <Lock className="h-3.5 w-3.5 text-zinc-500" />
-            <span>
-              Snapshot Imutável •{" "}
-              {isAnalista
-                ? "Visualização do Analista"
-                : "Auditoria Consolidada"}
-            </span>
+          <div className="flex items-center gap-2.5">
+            {isGestor && (
+              <button
+                type="button"
+                onClick={() => setIsEditingModalOpen(true)}
+                className="h-8 px-3 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                <span>Editar Nota</span>
+              </button>
+            )}
+
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-800 bg-[#101013] text-zinc-400 text-xs font-mono">
+              <Lock className="h-3.5 w-3.5 text-zinc-500" />
+              <span>
+                {isAnalista
+                  ? "Visualização do Analista"
+                  : "Auditoria Consolidada"}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -522,6 +537,10 @@ export default function EvaluationDetailPage() {
             ))}
           </div>
         </div>
+        <EditEvaluationScoreModal
+          evaluationId={isEditingModalOpen ? evaluation.id : null}
+          onClose={() => setIsEditingModalOpen(false)}
+        />
       </div>
     </AppShell>
   );

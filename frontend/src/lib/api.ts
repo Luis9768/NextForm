@@ -492,6 +492,22 @@ export const evaluationsApi = {
     const { data } = await api.post<Evaluation>("/evaluations", payload);
     return data;
   },
+  update: async (
+    id: string,
+    payload: {
+      manualFinalScore?: number | null;
+      fatalErrorTriggered?: boolean;
+      generalFeedback?: string;
+      items?: Array<{
+        id: string;
+        checked: boolean;
+        observation?: string | null;
+      }>;
+    }
+  ): Promise<Evaluation> => {
+    const { data } = await api.put<Evaluation>(`/evaluations/${id}`, payload);
+    return data;
+  },
 };
 
 export const usersApi = {

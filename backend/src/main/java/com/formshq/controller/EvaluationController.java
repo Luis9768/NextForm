@@ -2,6 +2,7 @@ package com.formshq.controller;
 
 import com.formshq.dto.evaluation.CreateEvaluationRequest;
 import com.formshq.dto.evaluation.EvaluationResponse;
+import com.formshq.dto.evaluation.UpdateEvaluationRequest;
 import com.formshq.security.UserPrincipal;
 import com.formshq.service.EvaluationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -76,5 +77,16 @@ public class EvaluationController {
             @AuthenticationPrincipal UserPrincipal currentUser
     ) {
         return ResponseEntity.ok(evaluationService.getEvaluationByCallId(callRecordId, currentUser));
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('ROLE_GESTOR')")
+    @Operation(summary = "Atualiza nota, status de falta grave, critérios e feedback de uma avaliação (exclusivo Gestor/Admin)")
+    public ResponseEntity<EvaluationResponse> updateEvaluation(
+            @PathVariable UUID id,
+            @RequestBody UpdateEvaluationRequest request,
+            @AuthenticationPrincipal UserPrincipal currentUser
+    ) {
+        return ResponseEntity.ok(evaluationService.updateEvaluation(id, request, currentUser));
     }
 }

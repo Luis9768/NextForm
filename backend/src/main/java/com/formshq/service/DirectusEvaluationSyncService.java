@@ -185,6 +185,58 @@ public class DirectusEvaluationSyncService {
                 }
             }
 
+            if (cr.getEvaluation() != null) {
+                Evaluation ev = cr.getEvaluation();
+                List<EvaluationItemSnapshot> snaps = ev.getItemSnapshots();
+                boolean allRegularUnchecked = snaps != null
+                        && !snaps.isEmpty()
+                        && snaps.stream().filter(s -> !s.isFatalErrorSnapshot()).noneMatch(EvaluationItemSnapshot::isChecked);
+                if (allRegularUnchecked) {
+                    Map<String, Object> aiData = (meta != null && meta.get("aiEvaluationData") instanceof Map<?, ?> m)
+                            ? (Map<String, Object>) m
+                            : Map.of();
+                    int repairedObtained = 0;
+                    int repairedMax = 0;
+                    for (EvaluationItemSnapshot snap : snaps) {
+                        if (snap.isFatalErrorSnapshot()) {
+                            continue;
+                        }
+                        int w = snap.getPointsSnapshot() != null && snap.getPointsSnapshot() > 0 ? snap.getPointsSnapshot() : 1;
+                        repairedMax += w;
+                        String colKey = extractDirectusKeyFromLabel(snap.getLabelSnapshot());
+                        Object rawVal = aiData.get(colKey);
+                        if (rawVal == null && "Faz_questionamentos_direcionados".equalsIgnoreCase(colKey)) {
+                            rawVal = aiData.get("Questionamentos_direcionados");
+                        }
+                        Boolean b = extractBooleanCriterion(rawVal);
+                        Number n = extractNumber(rawVal);
+                        boolean shouldCheck;
+                        if (b != null) {
+                            shouldCheck = b;
+                        } else if (n != null) {
+                            shouldCheck = n.intValue() > 0;
+                        } else {
+                            shouldCheck = true;
+                        }
+                        snap.setChecked(shouldCheck);
+                        if (shouldCheck) {
+                            repairedObtained += w;
+                            snap.setObservation(null);
+                        }
+                    }
+                    if (repairedMax > 0) {
+                        ev.setObtainedPoints(repairedObtained);
+                        ev.setMaxPossiblePoints(repairedMax);
+                        ev.setRawScorePercentage(
+                                BigDecimal.valueOf(repairedObtained)
+                                        .multiply(new BigDecimal("100.00"))
+                                        .divide(BigDecimal.valueOf(repairedMax), 2, RoundingMode.HALF_UP)
+                        );
+                        evaluationRepository.save(ev);
+                    }
+                }
+            }
+
             if (modified) {
                 callRecordRepository.save(cr);
             }
@@ -1110,6 +1162,7 @@ public class DirectusEvaluationSyncService {
                     rawColVal = item.get("Questionamentos_direcionados");
                 }
                 Number colScore = extractNumber(rawColVal);
+                Boolean colBool = extractBooleanCriterion(rawColVal);
 
                 boolean checked;
                 String itemObs = null;
@@ -1121,7 +1174,15 @@ public class DirectusEvaluationSyncService {
                         itemObs = extractString(item, "Motivo_falta_grave", "Falta grave apontada na monitoria Directus.");
                     }
                 } else {
-                    if (colScore != null) {
+                    if (colBool != null) {
+                        maxPossiblePoints += weight;
+                        checked = colBool;
+                        if (checked) {
+                            obtainedPoints += weight;
+                        } else {
+                            itemObs = "Critério não atendido na avaliação (0/" + weight + " pts)";
+                        }
+                    } else if (colScore != null) {
                         int val = colScore.intValue();
                         snapshotPoints = Math.max(weight, val);
                         maxPossiblePoints += snapshotPoints;
@@ -1155,7 +1216,7 @@ public class DirectusEvaluationSyncService {
                         .build());
             }
         } else {
-            int remainingTarget = fatalErrorTriggered ? 0 : directusFinalScore;
+            int remainingTarget = (fatalErrorTriggered && directusFinalScore == 0) ? 88 : directusFinalScore;
             boolean fatalMarked = false;
 
             for (EvaluationFormItem tItem : templateItems) {
@@ -1200,7 +1261,7 @@ public class DirectusEvaluationSyncService {
         }
 
         BigDecimal rawPercentage;
-        if (directusFinalScoreNum != null) {
+        if (directusFinalScoreNum != null && (!fatalErrorTriggered || directusFinalScore > 0)) {
             rawPercentage = BigDecimal.valueOf(directusFinalScore).setScale(2, RoundingMode.HALF_UP);
         } else {
             rawPercentage = BigDecimal.valueOf(obtainedPoints)
@@ -1224,7 +1285,9 @@ public class DirectusEvaluationSyncService {
             }
         }
 
-        evaluation.setObtainedPoints(directusFinalScoreNum != null ? directusFinalScore : obtainedPoints);
+        evaluation.setObtainedPoints((directusFinalScoreNum != null && (!fatalErrorTriggered || directusFinalScore > 0))
+                ? directusFinalScore
+                : obtainedPoints);
         evaluation.setMaxPossiblePoints(maxPossiblePoints);
         evaluation.setRawScorePercentage(rawPercentage);
         evaluation.setFinalScorePercentage(finalScorePercentage);
@@ -2274,6 +2337,22 @@ public class DirectusEvaluationSyncService {
         }
         String s = map.get(key).toString().trim();
         return isPlaceholderValue(s) ? fallback : s;
+    }
+
+    private Boolean extractBooleanCriterion(Object val) {
+        if (val instanceof Boolean b) {
+            return b;
+        }
+        if (val instanceof String s && !isPlaceholderValue(s)) {
+            String clean = s.trim().toLowerCase();
+            if ("true".equals(clean) || "sim".equals(clean)) {
+                return true;
+            }
+            if ("false".equals(clean) || "não".equals(clean) || "nao".equals(clean)) {
+                return false;
+            }
+        }
+        return null;
     }
 
     private Number extractNumber(Object val) {

@@ -7,6 +7,7 @@ import com.formshq.domain.enums.EvaluationStatus;
 import com.formshq.dto.evaluation.CreateEvaluationRequest;
 import com.formshq.dto.evaluation.EvaluationResponse;
 import com.formshq.dto.evaluation.ItemEvaluationInput;
+import com.formshq.dto.evaluation.UpdateEvaluationRequest;
 import com.formshq.exception.BusinessRuleException;
 import com.formshq.exception.DuplicateResourceException;
 import com.formshq.exception.ResourceNotFoundException;
@@ -323,5 +324,164 @@ public class EvaluationService {
         sectorScopePolicy.assertCallerCanAccessSector(currentUser, evalSector, analystDept);
 
         return EvaluationResponse.fromEntity(evaluation);
+    }
+
+    @Transactional
+    @CacheEvict(
+            value = {CacheConfig.CACHE_DASHBOARD, CacheConfig.CACHE_EVALUATIONS, CacheConfig.CACHE_CALLS},
+            allEntries = true
+    )
+    public EvaluationResponse updateEvaluation(
+            UUID id,
+            UpdateEvaluationRequest request,
+            UserPrincipal currentUser
+    ) {
+        if (!currentUser.isGestor()) {
+            throw new AccessDeniedException("Apenas Gestores e Administradores podem editar avaliações.");
+        }
+
+        Evaluation evaluation = evaluationRepository.findWithDetailsById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Avaliação não encontrada com ID: " + id));
+
+        String evalSector = sectorScopePolicy.resolveEvaluationSector(evaluation);
+        String analystDept = evaluation.getAnalyst() != null ? evaluation.getAnalyst().getDepartment() : null;
+        sectorScopePolicy.assertCallerCanAccessSector(currentUser, evalSector, analystDept);
+
+        if (request.generalFeedback() != null) {
+            evaluation.setGeneralFeedback(request.generalFeedback().trim());
+        }
+
+        List<EvaluationItemSnapshot> snapshots = evaluation.getItemSnapshots();
+        boolean hasItemUpdates = request.items() != null && !request.items().isEmpty();
+
+        if (hasItemUpdates) {
+            Map<UUID, UpdateEvaluationRequest.SnapshotItemUpdateInput> itemUpdateMap = request.items().stream()
+                    .filter(i -> i.id() != null)
+                    .collect(Collectors.toMap(
+                            UpdateEvaluationRequest.SnapshotItemUpdateInput::id,
+                            Function.identity(),
+                            (a, b) -> b
+                    ));
+
+            for (EvaluationItemSnapshot snap : snapshots) {
+                UpdateEvaluationRequest.SnapshotItemUpdateInput upd = itemUpdateMap.get(snap.getId());
+                if (upd == null && snap.getOriginalItemId() != null) {
+                    upd = itemUpdateMap.get(snap.getOriginalItemId());
+                }
+                if (upd != null) {
+                    snap.setChecked(upd.checked());
+                    if (upd.observation() != null) {
+                        snap.setObservation(upd.observation().trim().isEmpty() ? null : upd.observation().trim());
+                    }
+                }
+            }
+        }
+
+        boolean fatalErrorTriggered = evaluation.isFatalErrorTriggered();
+        if (request.fatalErrorTriggered() != null) {
+            fatalErrorTriggered = request.fatalErrorTriggered();
+            if (!fatalErrorTriggered) {
+                for (EvaluationItemSnapshot snap : snapshots) {
+                    if (snap.isFatalErrorSnapshot()) {
+                        snap.setChecked(false);
+                    }
+                }
+            } else {
+                boolean anyFatalChecked = snapshots.stream().anyMatch(s -> s.isFatalErrorSnapshot() && s.isChecked());
+                if (!anyFatalChecked) {
+                    snapshots.stream()
+                            .filter(EvaluationItemSnapshot::isFatalErrorSnapshot)
+                            .findFirst()
+                            .ifPresent(s -> s.setChecked(true));
+                }
+            }
+        } else if (hasItemUpdates) {
+            fatalErrorTriggered = snapshots.stream()
+                    .anyMatch(s -> s.isFatalErrorSnapshot() && s.isChecked());
+        }
+
+        int maxPossiblePoints = 0;
+        int obtainedPoints = 0;
+        for (EvaluationItemSnapshot snap : snapshots) {
+            if (!snap.isFatalErrorSnapshot()) {
+                int weight = snap.getPointsSnapshot() != null && snap.getPointsSnapshot() > 0 ? snap.getPointsSnapshot() : 1;
+                maxPossiblePoints += weight;
+                if (snap.isChecked()) {
+                    obtainedPoints += weight;
+                }
+            }
+        }
+        if (maxPossiblePoints <= 0) {
+            maxPossiblePoints = evaluation.getMaxPossiblePoints() != null && evaluation.getMaxPossiblePoints() > 0
+                    ? evaluation.getMaxPossiblePoints()
+                    : 100;
+        }
+
+        BigDecimal rawPercentage;
+        if (request.manualFinalScore() != null) {
+            BigDecimal clamped = request.manualFinalScore()
+                    .max(BigDecimal.ZERO)
+                    .min(new BigDecimal("100.00"))
+                    .setScale(2, RoundingMode.HALF_UP);
+            rawPercentage = clamped;
+            obtainedPoints = (int) Math.round((clamped.doubleValue() / 100.0) * maxPossiblePoints);
+
+            // Se não vieram itens individuais mas o gestor informou nota manual (ex: 100%), sincroniza os itens regulares proporcionalmente
+            if (!hasItemUpdates) {
+                int remainingPoints = obtainedPoints;
+                for (EvaluationItemSnapshot snap : snapshots) {
+                    if (!snap.isFatalErrorSnapshot()) {
+                        int weight = snap.getPointsSnapshot() != null && snap.getPointsSnapshot() > 0 ? snap.getPointsSnapshot() : 1;
+                        if (remainingPoints >= weight) {
+                            snap.setChecked(true);
+                            remainingPoints -= weight;
+                        } else {
+                            snap.setChecked(false);
+                        }
+                    }
+                }
+            }
+        } else {
+            rawPercentage = BigDecimal.valueOf(obtainedPoints)
+                    .multiply(new BigDecimal("100.00"))
+                    .divide(BigDecimal.valueOf(maxPossiblePoints), 2, RoundingMode.HALF_UP);
+        }
+
+        BigDecimal passingScore = evaluation.getPassingScoreSnapshot() != null
+                ? evaluation.getPassingScoreSnapshot()
+                : new BigDecimal("80.00");
+
+        BigDecimal finalScorePercentage;
+        EvaluationStatus status;
+
+        if (fatalErrorTriggered) {
+            finalScorePercentage = new BigDecimal("0.00");
+            status = EvaluationStatus.ZERADO_ERRO_GRAVE;
+        } else {
+            finalScorePercentage = rawPercentage;
+            if (finalScorePercentage.compareTo(passingScore) >= 0) {
+                status = EvaluationStatus.APROVADO;
+            } else {
+                status = EvaluationStatus.REPROVADO;
+            }
+        }
+
+        evaluation.setObtainedPoints(obtainedPoints);
+        evaluation.setMaxPossiblePoints(maxPossiblePoints);
+        evaluation.setRawScorePercentage(rawPercentage);
+        evaluation.setFinalScorePercentage(finalScorePercentage);
+        evaluation.setFatalErrorTriggered(fatalErrorTriggered);
+        evaluation.setStatus(status);
+
+        Evaluation saved = evaluationRepository.save(evaluation);
+        log.info("Avaliação revisada/editada por {}: evalId={}, analyst={}, finalScore={}%, fatalError={}, status={}",
+                currentUser.getEmail(),
+                saved.getId(),
+                saved.getAnalyst() != null ? saved.getAnalyst().getEmail() : "-",
+                finalScorePercentage,
+                fatalErrorTriggered,
+                status);
+
+        return EvaluationResponse.fromEntity(saved);
     }
 }
