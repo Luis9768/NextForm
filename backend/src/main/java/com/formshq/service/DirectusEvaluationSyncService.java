@@ -242,6 +242,39 @@ public class DirectusEvaluationSyncService {
             }
         }
         callRecordRepository.flush();
+
+        // Limpa quaisquer campos fictícios legados em clientes já existentes no banco
+        for (Customer c : customerRepository.findAll()) {
+            boolean custModified = false;
+            if (c.getName() != null && (c.getName().startsWith("Contato ")
+                    || c.getName().startsWith("Cliente ")
+                    || c.getName().startsWith("Ticket "))) {
+                c.setName("");
+                custModified = true;
+            }
+            if ("000.000.000-00".equals(c.getDocument())) {
+                c.setDocument("");
+                custModified = true;
+            }
+            if (c.getEmail() != null && (c.getEmail().endsWith("@directus.com.br") || c.getEmail().endsWith("@email.com.br"))) {
+                c.setEmail("");
+                custModified = true;
+            }
+            if (c.getContractedPlan() != null && ("TIM Controle Smart / Plus".equals(c.getContractedPlan())
+                    || "Plano Assistencial".equals(c.getContractedPlan())
+                    || c.getContractedPlan().startsWith("Fibra Empresarial"))) {
+                c.setContractedPlan("");
+                custModified = true;
+            }
+            if (c.getProtocol() != null && (c.getProtocol().startsWith("PROT-2026-") || c.getProtocol().startsWith("DIR-"))) {
+                c.setProtocol("");
+                custModified = true;
+            }
+            if (custModified) {
+                customerRepository.save(c);
+            }
+        }
+        customerRepository.flush();
     }
 
     /**
@@ -1826,24 +1859,20 @@ public class DirectusEvaluationSyncService {
                 extractString(item, "protocolo", null),
                 proposta,
                 ticket,
-                "DIR-" + collection.toUpperCase() + "-" + directusId
+                ""
         );
-
-        String defaultName = rawPhone != null ? "Cliente Portabilidade " + cleanPhone : "Cliente Ticket " + protocol;
-        String defaultEmail = "cliente." + cleanPhone + "@directus.com.br";
-        String defaultPlan = COL_AQUISICAO.equalsIgnoreCase(collection) ? "TIM Controle Smart / Plus" : "Plano Assistencial";
 
         return customerRepository.findByPhone(cleanPhone)
                 .map(existing -> {
-                    existing.setName(nome != null ? formatTitleCase(nome) : (isPlaceholderValue(existing.getName()) ? defaultName : existing.getName()));
-                    existing.setDocument(cpf != null ? cpf : (isPlaceholderValue(existing.getDocument()) ? "000.000.000-00" : existing.getDocument()));
-                    existing.setEmail(email != null ? email : (isPlaceholderValue(existing.getEmail()) ? defaultEmail : existing.getEmail()));
-                    existing.setProtocol(protocol != null ? protocol : existing.getProtocol());
+                    existing.setName(nome != null ? formatTitleCase(nome) : (isPlaceholderValue(existing.getName()) ? "" : existing.getName()));
+                    existing.setDocument(cpf != null ? cpf : (isPlaceholderValue(existing.getDocument()) ? "" : existing.getDocument()));
+                    existing.setEmail(email != null ? email : (isPlaceholderValue(existing.getEmail()) ? "" : existing.getEmail()));
+                    existing.setProtocol(protocol != null && !protocol.isEmpty() ? protocol : existing.getProtocol());
                     existing.setProposal(proposta != null ? proposta : (isPlaceholderValue(existing.getProposal()) ? null : existing.getProposal()));
                     existing.setSaleDate(saleDate != null ? saleDate : (isPlaceholderValue(existing.getSaleDate()) ? null : existing.getSaleDate()));
                     existing.setBirthDate(nascimento != null ? nascimento : (isPlaceholderValue(existing.getBirthDate()) ? null : existing.getBirthDate()));
                     existing.setMotherName(nomeMae != null ? formatTitleCase(nomeMae) : (isPlaceholderValue(existing.getMotherName()) ? null : existing.getMotherName()));
-                    existing.setContractedPlan(plano != null ? plano : (isPlaceholderValue(existing.getContractedPlan()) ? defaultPlan : existing.getContractedPlan()));
+                    existing.setContractedPlan(plano != null ? plano : (isPlaceholderValue(existing.getContractedPlan()) ? null : existing.getContractedPlan()));
                     existing.setPaymentMethod(formaPagamento != null ? formaPagamento : (isPlaceholderValue(existing.getPaymentMethod()) ? null : existing.getPaymentMethod()));
                     existing.setInvoiceType(tipoFatura != null ? tipoFatura : (isPlaceholderValue(existing.getInvoiceType()) ? null : existing.getInvoiceType()));
                     existing.setFullAddress(endereco != null ? endereco : (isPlaceholderValue(existing.getFullAddress()) ? null : existing.getFullAddress()));
@@ -1853,15 +1882,15 @@ public class DirectusEvaluationSyncService {
                 })
                 .orElseGet(() -> customerRepository.save(Customer.builder()
                         .phone(cleanPhone)
-                        .name(nome != null ? formatTitleCase(nome) : defaultName)
-                        .document(cpf != null ? cpf : "000.000.000-00")
-                        .email(email != null ? email : defaultEmail)
-                        .protocol(protocol)
+                        .name(nome != null ? formatTitleCase(nome) : "")
+                        .document(cpf != null ? cpf : "")
+                        .email(email != null ? email : "")
+                        .protocol(protocol != null ? protocol : "")
                         .proposal(proposta)
                         .saleDate(saleDate)
                         .birthDate(nascimento)
                         .motherName(nomeMae != null ? formatTitleCase(nomeMae) : null)
-                        .contractedPlan(plano != null ? plano : defaultPlan)
+                        .contractedPlan(plano)
                         .paymentMethod(formaPagamento)
                         .invoiceType(tipoFatura)
                         .fullAddress(endereco)

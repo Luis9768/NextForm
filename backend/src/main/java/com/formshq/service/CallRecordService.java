@@ -741,18 +741,12 @@ public class CallRecordService {
     }
 
     private Customer provisionCustomerFromWebhook(String phone) {
-        int hash = phone.hashCode() & 0x7fffffff;
-        String cpf = String.format("%03d.%03d.%03d-%02d",
-                (hash % 899) + 100,
-                ((hash / 10) % 899) + 100,
-                ((hash / 100) % 899) + 100,
-                hash % 99);
         return customerRepository.save(Customer.builder()
                 .phone(phone)
-                .name("Cliente " + phone)
-                .document(cpf)
-                .email("cliente." + (hash % 9999) + "@email.com.br")
-                .protocol(String.format("PROT-2026-%06d", hash % 999999))
+                .name("")
+                .document("")
+                .email("")
+                .protocol("")
                 .build());
     }
 

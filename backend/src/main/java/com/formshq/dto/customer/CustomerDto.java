@@ -28,22 +28,22 @@ public record CustomerDto(
         if (customer == null) return null;
         return new CustomerDto(
                 customer.getId(),
-                customer.getPhone(),
-                customer.getSaleDate() != null ? customer.getSaleDate() : "28/10/2026",
-                customer.getName(),
-                customer.getDocument(),
-                customer.getBirthDate() != null ? customer.getBirthDate() : "14/05/1985",
-                customer.getMotherName() != null ? customer.getMotherName() : "Helena Almeida Prado",
-                customer.getFatherName() != null ? customer.getFatherName() : "Não informado",
-                customer.getContractedPlan() != null ? customer.getContractedPlan() : "Fibra Empresarial 600 Mega + Pós 50GB",
-                customer.getProposal() != null ? customer.getProposal() : "PROP-2026-88412",
-                customer.getEmail(),
-                customer.getPaymentMethod() != null ? customer.getPaymentMethod() : "Débito Automático",
-                customer.getInvoiceType() != null ? customer.getInvoiceType() : "Fatura Digital (E-mail / WhatsApp)",
-                customer.getFullAddress() != null ? customer.getFullAddress() : "Av. Paulista, 1578 - Bela Vista, São Paulo - SP",
-                customer.getDueDate() != null ? customer.getDueDate() : "Todo dia 10",
-                customer.getEarlyPortability() != null ? customer.getEarlyPortability() : "Sim (Portabilidade Autorizada)",
-                customer.getProtocol()
+                customer.getPhone() != null ? customer.getPhone() : "",
+                customer.getSaleDate() != null ? customer.getSaleDate() : "",
+                customer.getName() != null ? customer.getName() : "",
+                customer.getDocument() != null ? customer.getDocument() : "",
+                customer.getBirthDate() != null ? customer.getBirthDate() : "",
+                customer.getMotherName() != null ? customer.getMotherName() : "",
+                customer.getFatherName() != null ? customer.getFatherName() : "",
+                customer.getContractedPlan() != null ? customer.getContractedPlan() : "",
+                customer.getProposal() != null ? customer.getProposal() : "",
+                customer.getEmail() != null ? customer.getEmail() : "",
+                customer.getPaymentMethod() != null ? customer.getPaymentMethod() : "",
+                customer.getInvoiceType() != null ? customer.getInvoiceType() : "",
+                customer.getFullAddress() != null ? customer.getFullAddress() : "",
+                customer.getDueDate() != null ? customer.getDueDate() : "",
+                customer.getEarlyPortability() != null ? customer.getEarlyPortability() : "",
+                customer.getProtocol() != null ? customer.getProtocol() : ""
         );
     }
 }

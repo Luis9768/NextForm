@@ -281,11 +281,37 @@ public class CustomerLookupService {
             }
         }
 
-        Optional<Customer> matchedCustomer = findCustomerByFlexibleKey(rawKey, detectedType);
+        Optional<Customer> matchedCustomer = findCustomerByFlexibleKey(rawKey, detectedType)
+                .filter(c -> c.getName() != null
+                        && !c.getName().isBlank()
+                        && !c.getName().startsWith("Contato ")
+                        && !c.getName().startsWith("Cliente ")
+                        && !c.getName().startsWith("Ticket "));
 
-        Customer customer = matchedCustomer
-                .map(this::ensureWebhookFieldsPopulated)
-                .orElseGet(() -> createFallbackCustomerForKey(rawKey, detectedType, paramPersonName, paramCpf, paramMotherName, paramFatherName));
+        if (matchedCustomer.isEmpty()) {
+            CustomerDto emptyDto = new CustomerDto(
+                    null,
+                    cleanPhone,
+                    "",
+                    paramPersonName,
+                    paramCpf,
+                    "",
+                    paramMotherName,
+                    paramFatherName,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    ""
+            );
+            return new CustomerLookupResponse(emptyDto, "NOT_FOUND", List.of());
+        }
+
+        Customer customer = ensureWebhookFieldsPopulated(matchedCustomer.get());
 
         if (customer.getPhone() != null && customer.getPhone().startsWith("+55")) {
             customer.setPhone(normalizePhone(customer.getPhone()));
@@ -577,27 +603,10 @@ public class CustomerLookupService {
 
         if (analystId != null) {
             List<CallRecord> forAnalyst = matched.stream()
-                    .filter(c -> c.getAnalyst().getId().equals(analystId))
+                    .filter(c -> c.getAnalyst() != null && c.getAnalyst().getId().equals(analystId))
                     .toList();
-
             if (!forAnalyst.isEmpty()) {
                 return forAnalyst.stream().map(CallRecordResponse::fromEntity).toList();
-            }
-
-            Optional<User> analystOpt = userRepository.findById(analystId);
-            if (analystOpt.isPresent()) {
-                CallRecord provisioned = createCallForAnalystAndCustomer(analystOpt.get(), customer);
-                return List.of(CallRecordResponse.fromEntity(provisioned));
-            }
-        }
-
-        if (matched.isEmpty()) {
-            List<User> analysts = userRepository.findByRoleOrderByNameAsc(Role.ROLE_ANALISTA);
-            if (!analysts.isEmpty()) {
-                int hash = customer.getPhone().hashCode() & 0x7fffffff;
-                User analyst = analysts.get(Math.floorMod(hash, analysts.size()));
-                CallRecord provisioned = createCallForAnalystAndCustomer(analyst, customer);
-                return List.of(CallRecordResponse.fromEntity(provisioned));
             }
         }
 
@@ -653,7 +662,7 @@ public class CustomerLookupService {
         customer.setPhone(lookupPhone);
         customer.setSaleDate(pickAnyString(data, List.of("Data_Venda", "Data_da_Venda", "data_da_venda", "dataDaVenda", "saleDate"), ""));
         customer.setName(pickAnyString(data, List.of("Nome", "nome", "nome_completo", "nome_da_pessoa", "Nome_da_Pessoa", "name", "cliente"),
-                !fallbackPersonName.isBlank() ? fallbackPersonName : ("Contato " + lookupPhone)));
+                fallbackPersonName));
         customer.setDocument(pickAnyString(data, List.of("CPF", "Cpf", "cpf", "document", "documento"),
                 !fallbackCpf.isBlank() ? fallbackCpf : ""));
         customer.setBirthDate(pickAnyString(data, List.of("Data_de_nascimento", "Data_Nascimento", "data_de_nascimento", "dataDeNascimento", "birthDate"), ""));

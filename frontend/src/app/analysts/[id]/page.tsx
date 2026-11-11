@@ -1104,9 +1104,17 @@ function AnalystEvaluationFlowInner() {
 
   const applyCustomerFields = useCallback((cust: CustomerInfo) => {
     setCustomerInfo(cust);
+    const cleanName =
+      cust.name &&
+      !cust.name.startsWith("Contato ") &&
+      !cust.name.startsWith("Cliente ")
+        ? cust.name
+        : "";
+    const cleanDoc =
+      cust.document && cust.document !== "000.000.000-00" ? cust.document : "";
     setSaleDateInput(cust.saleDate || "");
-    setCustomerNameInput(cust.name || "");
-    setCustomerCpfInput(cust.document || "");
+    setCustomerNameInput(cleanName);
+    setCustomerCpfInput(cleanDoc);
     setBirthDateInput(cust.birthDate || "");
     setCustomerMotherInput(cust.motherName || "");
     setContractedPlanInput(cust.contractedPlan || "");
@@ -1704,6 +1712,11 @@ function AnalystEvaluationFlowInner() {
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300">
                         <Loader2 className="h-3 w-3 animate-spin text-zinc-200" />
                         <span>Consultando...</span>
+                      </span>
+                    ) : webhookSource === "NOT_FOUND" ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-950/40 border border-amber-800/70 text-[11px] font-mono text-amber-300">
+                        <AlertTriangle className="h-3 w-3 text-amber-400" />
+                        <span>Não encontrado na base</span>
                       </span>
                     ) : webhookSource ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-950/40 border border-emerald-800/70 text-[11px] font-mono text-emerald-300">
