@@ -240,6 +240,7 @@ html:not(.dark) main .text-zinc-50,
 html:not(.dark) main .text-zinc-100,
 html:not(.dark) main .text-zinc-200,
 html:not(.dark) main .text-white,
+html:not(.dark) main .group:hover .group-hover\:text-white,
 html:not(.dark) .theme-surface .text-zinc-50,
 html:not(.dark) .theme-surface .text-zinc-100,
 html:not(.dark) .theme-surface .text-zinc-200,
@@ -272,11 +273,6 @@ html:not(.dark) main .bg-zinc-100.text-zinc-950:hover,
 html:not(.dark) .theme-surface .bg-zinc-100.text-zinc-950:hover {
   background-color: #27272a !important;
   color: #ffffff !important;
-}
-
-/* Barras da onda sonora (Waveform) no modo claro */
-html:not(.dark) main .bg-zinc-200 {
-  background-color: #18181b !important;
 }
 
 /* Hover de linhas de tabela e listas no modo claro */

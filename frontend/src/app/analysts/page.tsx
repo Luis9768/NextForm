@@ -210,15 +210,16 @@ export default function AnalystsDirectoryPage() {
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-2.5">
                         <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          <div className="h-9 w-9 rounded-lg bg-zinc-200 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 flex items-center justify-center font-mono font-bold text-xs text-zinc-900 dark:text-zinc-100 shrink-0">
+                          <div className="h-9 w-9 rounded-lg bg-[#15151a] border border-zinc-800 flex items-center justify-center font-mono font-bold text-xs text-zinc-100 shrink-0">
                             {analyst.analystName
                               .split(" ")
-                              .map((n) => n[0])
+                              .filter(Boolean)
+                              .map((n) => n[0]?.toUpperCase())
                               .slice(0, 2)
                               .join("")}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 group-hover:text-white truncate">
+                            <h2 className="text-sm font-bold text-zinc-100 truncate">
                               {analyst.analystName}
                             </h2>
                             <p className="text-[11px] font-mono text-zinc-500 truncate">
