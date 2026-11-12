@@ -106,8 +106,17 @@ public class DirectusEvaluationSyncService {
         this.bootstrapAdminEmail = bootstrapAdminEmail;
     }
 
+    private static final Set<String> PURGED_TEST_CALL_CODES = Set.of(
+            "call_838747",
+            "call_873023"
+    );
+
     private boolean isCorruptedNov5CallRecord(CallRecord cr) {
         if (cr == null) return false;
+        String extId = cr.getExternalCallId() != null ? cr.getExternalCallId().trim().replace("#", "").toLowerCase() : "";
+        if (PURGED_TEST_CALL_CODES.contains(extId)) {
+            return true;
+        }
         String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
         String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
         String custName = cr.getCustomer() != null && cr.getCustomer().getName() != null ? cr.getCustomer().getName() : "";
