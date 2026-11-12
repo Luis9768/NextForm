@@ -330,7 +330,7 @@ export default function CallsListPage() {
                         </>
                       ) : isGestor ? (
                         <Link
-                          href={`/calls/${call.id}/evaluate`}
+                          href={`/analysts/${call.analyst.id}?callId=${call.id}`}
                           className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-semibold transition-colors"
                         >
                           <Headphones className="h-3.5 w-3.5" />

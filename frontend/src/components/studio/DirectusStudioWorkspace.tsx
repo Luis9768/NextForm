@@ -660,7 +660,7 @@ export function DirectusStudioWorkspace({
                                 </button>
                                 {call.status === "PENDENTE" && (
                                   <Link
-                                    href={`/calls/${call.id}/evaluate`}
+                                    href={`/analysts/${call.analyst.id}?callId=${call.id}`}
                                     className="h-8 px-3 rounded-md bg-zinc-100 text-zinc-950 font-semibold text-xs inline-flex items-center gap-1.5"
                                   >
                                     <Headphones className="h-3.5 w-3.5" />
@@ -983,7 +983,7 @@ export function DirectusStudioWorkspace({
                       </Link>
                     ) : (
                       <Link
-                        href={`/analysts/${drawerItem.callRecord.analyst.id}`}
+                        href={`/analysts/${drawerItem.callRecord.analyst.id}?callId=${drawerItem.callRecord.id}`}
                         className="h-9 px-4 rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 text-xs font-semibold inline-flex items-center gap-1.5"
                       >
                         <Headphones className="h-3.5 w-3.5" />

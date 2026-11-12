@@ -121,7 +121,23 @@ public class DirectusEvaluationSyncService {
             "call_772014",
             "call_798123",
             "call_695083",
-            "call_881168"
+            "call_881168",
+            "call_645294",
+            "call_192991",
+            "call_668495",
+            "call_424613",
+            "call_355980",
+            "call_891890",
+            "call_343595",
+            "call_454725",
+            "call_616302",
+            "call_840221",
+            "call_334024",
+            "call_472305",
+            "call_684570",
+            "call_252315",
+            "call_990192",
+            "call_190708"
     );
 
     private boolean isJunkOrSyntheticAnalyst(User u) {
@@ -145,6 +161,15 @@ public class DirectusEvaluationSyncService {
         String extId = cr.getExternalCallId() != null ? cr.getExternalCallId().trim().replace("#", "").toLowerCase() : "";
         if (PURGED_TEST_CALL_CODES.contains(extId) || isJunkOrSyntheticAnalyst(cr.getAnalyst())) {
             return true;
+        }
+        // Remove qualquer ligação PENDENTE órfã (gerada pelo antigo CustomerLookupService "telefonia" ou uploads de teste abandonados)
+        if (cr.getEvaluation() == null) {
+            boolean isRecentActiveUpload = "upload-manual".equalsIgnoreCase(cr.getChannel())
+                    && cr.getCallDate() != null
+                    && cr.getCallDate().isAfter(OffsetDateTime.now().minusMinutes(25));
+            if (!isRecentActiveUpload) {
+                return true;
+            }
         }
         String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
         String audioUrl = cr.getAudioUrl() != null ? cr.getAudioUrl() : "";
@@ -1101,6 +1126,11 @@ public class DirectusEvaluationSyncService {
                             || hasAnyExplicitCriterionValue(item, template.getItems());
 
                     if (!hasEvaluationScoresInPayload && "upload-manual".equals(existingCall.getChannel()) && existingCall.getEvaluation() == null) {
+                        if (transcricao == null || transcricao.isBlank()) {
+                            metadata.put("aiWebhookStatus", "ERROR");
+                            metadata.put("aiWebhookError", "O webhook respondeu sem transcrição de áudio. Verifique se o workflow de transcrição está ativo no n8n.");
+                        }
+                        existingCall.setMetadata(metadata);
                         callRecordRepository.save(existingCall);
                         importedCount++;
                         importedCodes.add(existingCall.getExternalCallId());
@@ -2209,16 +2239,6 @@ public class DirectusEvaluationSyncService {
         Optional<CallRecord> byDetExt = callRecordRepository.findByExternalCallId(externalCallId);
         if (byDetExt.isPresent()) {
             return byDetExt;
-        }
-        String rawPhone = extractString(item, "Telefone_Portabilidade", null);
-        if (rawPhone != null && !rawPhone.isBlank()) {
-            String cleanPhone = CustomerLookupService.normalizePhone(rawPhone);
-            List<CallRecord> byPhone = callRecordRepository.findByCustomerIdentifierContainingOrderByCallDateDesc(cleanPhone);
-            for (CallRecord candidate : byPhone) {
-                if (candidate.getStatus() == CallStatus.PENDENTE) {
-                    return Optional.of(candidate);
-                }
-            }
         }
         return Optional.empty();
     }

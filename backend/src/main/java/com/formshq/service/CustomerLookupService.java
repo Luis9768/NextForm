@@ -613,33 +613,6 @@ public class CustomerLookupService {
         return matched.stream().map(CallRecordResponse::fromEntity).toList();
     }
 
-    private CallRecord createCallForAnalystAndCustomer(User analyst, Customer customer) {
-        int hash = (customer.getPhone() + ":" + analyst.getEmail()).hashCode() & 0x7fffffff;
-        String extCallId = "call_" + (100000 + (hash % 899999));
-        Optional<CallRecord> existing = callRecordRepository.findByExternalCallId(extCallId);
-        if (existing.isPresent()) {
-            return existing.get();
-        }
-
-        return callRecordRepository.save(CallRecord.builder()
-                .externalCallId(extCallId)
-                .analyst(analyst)
-                .customer(customer)
-                .customerIdentifier(normalizePhone(customer.getPhone()))
-                .callDate(OffsetDateTime.now().minusMinutes(45))
-                .durationSeconds(195)
-                .audioUrl("/api/v1/audio/" + extCallId + ".wav?duration=28")
-                .status(CallStatus.PENDENTE)
-                .channel("telefonia")
-                .campaign("atendimento-monitorado")
-                .metadata(Map.of(
-                        "channel", "telefonia",
-                        "campaign", "atendimento-monitorado",
-                        "protocol", customer.getProtocol() != null ? customer.getProtocol() : "CRM-2026"
-                ))
-                .build());
-    }
-
     private Customer syncCustomerFromExternalMap(
             String fallbackKey,
             Map<String, Object> data,

@@ -377,14 +377,18 @@ function AnalystEvaluationFlowInner() {
   const analystId = params.id;
   const searchParams = useSearchParams();
   const initialSectorParam = searchParams.get("sector") || "";
+  const initialCallIdParam = searchParams.get("callId") || "";
   const router = useRouter();
   const queryClient = useQueryClient();
   const { isGestor } = useAuth();
 
-  const [step, setStep] = useState<FlowStep>(1);
+  const [step, setStep] = useState<FlowStep>(() =>
+    initialCallIdParam ? 2 : 1
+  );
   const [flowError, setFlowError] = useState<string | null>(null);
   const [isSwitchingForm, setIsSwitchingForm] = useState(false);
   const initializedAnalystFormRef = useRef(false);
+  const initializedPendingCallRef = useRef<string | null>(null);
 
   // Campos Condicionais SAC / Retenção (Busca por Ticket sem # + Campos do Atendimento)
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -436,7 +440,7 @@ function AnalystEvaluationFlowInner() {
   useEffect(() => {
     return () => {
       recordingsRef.current.forEach((slot) => {
-        if (slot.previewUrl) {
+        if (slot.previewUrl && slot.previewUrl.startsWith("blob:")) {
           URL.revokeObjectURL(slot.previewUrl);
         }
       });
@@ -669,6 +673,17 @@ function AnalystEvaluationFlowInner() {
       enabled: isGestor,
     });
 
+  const {
+    data: preloadedCall,
+    isLoading: isPreloadedCallLoading,
+    isError: isPreloadedCallError,
+  } = useQuery({
+    queryKey: ["preloaded-call", initialCallIdParam],
+    queryFn: () => callsApi.getById(initialCallIdParam),
+    enabled: !!initialCallIdParam && isGestor,
+    retry: 1,
+  });
+
   const applyTemplateSelection = useCallback((tpl: FormTemplate) => {
     setSelectedTemplateId(tpl.id);
     const initialChecks: Record<string, boolean> = {};
@@ -681,6 +696,7 @@ function AnalystEvaluationFlowInner() {
 
   // Inicializa o formulário correspondente ao setor do analista assim que os dados carregarem
   useEffect(() => {
+    if (initialCallIdParam) return;
     if (existingTemplates.length === 0) return;
     const targetSector = analyst?.department || initialSectorParam;
     if (!targetSector) return;
@@ -693,6 +709,7 @@ function AnalystEvaluationFlowInner() {
       }
     }
   }, [
+    initialCallIdParam,
     analyst?.department,
     existingTemplates,
     initialSectorParam,
@@ -878,6 +895,8 @@ function AnalystEvaluationFlowInner() {
         setMotivoFaltaGrave(enrichedMotivo);
       }
 
+      let hasTranscriptOrCriteria = Boolean(rawTranscricao.trim());
+
       if (targetForm && targetForm.items.length > 0) {
         const nextChecked: Record<string, boolean> = {};
         let matchedCriteriaCount = 0;
@@ -918,10 +937,11 @@ function AnalystEvaluationFlowInner() {
         if (matchedCriteriaCount > 0) {
           setCheckedMap(nextChecked);
           appliedAny = true;
+          hasTranscriptOrCriteria = true;
         }
       }
 
-      if (appliedAny) {
+      if (hasTranscriptOrCriteria) {
         setAiSyncStatus("COMPLETED");
       }
       return appliedAny;
@@ -1083,22 +1103,29 @@ function AnalystEvaluationFlowInner() {
       setIsSwitchingForm(true);
       applyTemplateSelection(chosen);
 
-      const chosenContext = `${chosen.sector || ""} ${
-        chosen.name || ""
-      }`.toLowerCase();
-      const nextIsSacRet =
-        chosenContext.includes("sac") ||
-        chosenContext.includes("reten") ||
-        chosenContext.includes("cobran");
-      resetCustomerFieldsForModeSwitch(nextIsSacRet);
+      if (step === 1) {
+        const chosenContext = `${chosen.sector || ""} ${
+          chosen.name || ""
+        }`.toLowerCase();
+        const nextIsSacRet =
+          chosenContext.includes("sac") ||
+          chosenContext.includes("reten") ||
+          chosenContext.includes("cobran");
+        resetCustomerFieldsForModeSwitch(nextIsSacRet);
+      } else if (selectedCall?.metadata?.aiEvaluationData) {
+        applyAiEvaluationPayload(selectedCall.metadata.aiEvaluationData, chosen);
+      }
 
       setTimeout(() => setIsSwitchingForm(false), 150);
     },
     [
+      applyAiEvaluationPayload,
       applyTemplateSelection,
       existingTemplates,
       resetCustomerFieldsForModeSwitch,
+      selectedCall?.metadata?.aiEvaluationData,
       selectedTemplateId,
+      step,
     ]
   );
 
@@ -1126,6 +1153,153 @@ function AnalystEvaluationFlowInner() {
     setDueDateInput(cust.dueDate || "");
     setEarlyPortabilityInput(cust.earlyPortability || "");
   }, []);
+
+  // Quando a tela é aberta a partir de uma ligação pendente (?callId=...), carrega a gravação e abre direto na Etapa 2 (Estúdio)
+  useEffect(() => {
+    if (!initialCallIdParam) {
+      if (initializedPendingCallRef.current) {
+        initializedPendingCallRef.current = null;
+        setSelectedCall(null);
+        setStep(1);
+      }
+      return;
+    }
+    if (isPreloadedCallError) {
+      setFlowError("Não foi possível carregar a ligação pendente selecionada.");
+      setStep(1);
+      return;
+    }
+    if (!preloadedCall || existingTemplates.length === 0) return;
+    if (initializedPendingCallRef.current === preloadedCall.id) return;
+
+    if (preloadedCall.evaluationId) {
+      router.replace(`/evaluations/${preloadedCall.evaluationId}`);
+      return;
+    }
+
+    initializedPendingCallRef.current = preloadedCall.id;
+    initializedAnalystFormRef.current = true;
+
+    const meta = (preloadedCall.metadata || {}) as Record<string, unknown>;
+    const metaFormId =
+      typeof meta.formTemplateId === "string" ? meta.formTemplateId.trim() : "";
+    const metaSector =
+      (typeof meta.sector === "string" && meta.sector.trim()) ||
+      preloadedCall.campaign ||
+      analyst?.department ||
+      initialSectorParam ||
+      "SAC";
+
+    const targetTemplate =
+      (metaFormId
+        ? existingTemplates.find((t) => t.id === metaFormId)
+        : null) || resolveTemplateForSector(metaSector, existingTemplates);
+
+    if (targetTemplate) {
+      applyTemplateSelection(targetTemplate);
+    }
+
+    setSelectedCall(preloadedCall);
+    setStudioDuration(preloadedCall.durationSeconds || 180);
+
+    if (preloadedCall.customer) {
+      applyCustomerFields(preloadedCall.customer);
+      setPhoneInput(
+        preloadedCall.customer.phone || preloadedCall.customerIdentifier || ""
+      );
+    } else if (preloadedCall.customerIdentifier) {
+      setPhoneInput(preloadedCall.customerIdentifier);
+    }
+
+    const savedTicket =
+      (typeof meta.ticket === "string" && meta.ticket.trim()) ||
+      (typeof meta.ticket_id === "string" && meta.ticket_id.trim()) ||
+      "";
+    if (savedTicket) {
+      setTicketInput(savedTicket.replace(/#/g, ""));
+    }
+    if (typeof meta.attendanceDate === "string" && meta.attendanceDate.trim()) {
+      setDataAtendimentoInput(meta.attendanceDate.trim());
+    }
+    if (typeof meta.monitoringDate === "string" && meta.monitoringDate.trim()) {
+      setDataMonitoriaInput(meta.monitoringDate.trim());
+    }
+
+    if (Array.isArray(meta.recordings) && meta.recordings.length > 0) {
+      const mappedSlots: CallRecordingSlot[] = meta.recordings.map(
+        (rec: unknown, idx: number) => {
+          const rObj =
+            rec && typeof rec === "object"
+              ? (rec as Record<string, unknown>)
+              : {};
+          const recUrl =
+            typeof rObj.audioUrl === "string" && rObj.audioUrl.trim()
+              ? rObj.audioUrl.trim()
+              : preloadedCall.audioUrl;
+          const recDur =
+            typeof rObj.durationSeconds === "number" && rObj.durationSeconds > 0
+              ? rObj.durationSeconds
+              : preloadedCall.durationSeconds || 180;
+          return {
+            id: `pending_rec_${preloadedCall.id}_${idx}`,
+            file: null,
+            previewUrl: recUrl,
+            durationSeconds: recDur,
+            error: null,
+          };
+        }
+      );
+      setRecordings(mappedSlots);
+    } else {
+      setRecordings([
+        {
+          id: `pending_rec_${preloadedCall.id}_0`,
+          file: null,
+          previewUrl: preloadedCall.audioUrl,
+          durationSeconds: preloadedCall.durationSeconds || 180,
+          error: null,
+        },
+      ]);
+    }
+
+    const hasTranscript =
+      typeof meta.transcricao === "string" && meta.transcricao.trim().length > 0;
+    if (meta.aiEvaluationData || hasTranscript) {
+      const payloadWithTranscricao =
+        typeof meta.aiEvaluationData === "object" &&
+        meta.aiEvaluationData !== null
+          ? {
+              ...(meta.aiEvaluationData as Record<string, unknown>),
+              ...(hasTranscript ? { transcricao: meta.transcricao } : {}),
+            }
+          : { transcricao: meta.transcricao };
+      applyAiEvaluationPayload(payloadWithTranscricao, targetTemplate);
+    } else if (meta.aiWebhookStatus === "ERROR") {
+      setAiSyncStatus("ERROR");
+      setAiWebhookError(
+        typeof meta.aiWebhookError === "string"
+          ? meta.aiWebhookError
+          : "O webhook n8n retornou erro ou está inativo."
+      );
+    } else if (meta.aiWebhookStatus === "PROCESSING") {
+      setAiSyncStatus("PROCESSING");
+    } else {
+      setAiSyncStatus("IDLE");
+    }
+
+    setStep(2);
+  }, [
+    analyst?.department,
+    applyAiEvaluationPayload,
+    applyCustomerFields,
+    applyTemplateSelection,
+    existingTemplates,
+    initialCallIdParam,
+    initialSectorParam,
+    isPreloadedCallError,
+    preloadedCall,
+    router,
+  ]);
 
   const pullTicketFromWebhook = useCallback(
     async (rawTicket: string, force = false) => {
@@ -1307,7 +1481,7 @@ function AnalystEvaluationFlowInner() {
     setRecordings((prev) => {
       if (prev.length <= 1) return prev;
       const target = prev.find((r) => r.id === slotId);
-      if (target?.previewUrl) {
+      if (target?.previewUrl && target.previewUrl.startsWith("blob:")) {
         URL.revokeObjectURL(target.previewUrl);
       }
       return prev.filter((r) => r.id !== slotId);
@@ -1322,7 +1496,7 @@ function AnalystEvaluationFlowInner() {
       setRecordings((prev) =>
         prev.map((slot) => {
           if (slot.id !== slotId) return slot;
-          if (slot.previewUrl) {
+          if (slot.previewUrl && slot.previewUrl.startsWith("blob:")) {
             URL.revokeObjectURL(slot.previewUrl);
           }
           return {
@@ -1662,7 +1836,12 @@ function AnalystEvaluationFlowInner() {
         )}
 
         {/* Skeleton leve durante carregamento inicial ou troca de formulário */}
-        {isAnalystLoading || isTemplatesLoading || isSwitchingForm ? (
+        {isAnalystLoading ||
+        isTemplatesLoading ||
+        isSwitchingForm ||
+        (!!initialCallIdParam &&
+          !isPreloadedCallError &&
+          (isPreloadedCallLoading || !selectedCall)) ? (
           <div className="max-w-4xl p-6 rounded-xl border border-zinc-800/90 bg-[#0b0b0d] space-y-4">
             <div className="flex items-center gap-2 text-xs font-mono text-zinc-400">
               <Loader2 className="h-4 w-4 animate-spin text-zinc-200" />

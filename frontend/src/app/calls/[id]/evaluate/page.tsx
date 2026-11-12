@@ -54,6 +54,14 @@ export default function EvaluateCallPage() {
   });
 
   useEffect(() => {
+    if (call?.evaluationId) {
+      router.replace(`/evaluations/${call.evaluationId}`);
+    } else if (call?.analyst?.id) {
+      router.replace(`/analysts/${call.analyst.id}?callId=${call.id}`);
+    }
+  }, [call, router]);
+
+  useEffect(() => {
     if (forms.length > 0 && !selectedFormId) {
       setSelectedFormId(forms[0].id);
     }

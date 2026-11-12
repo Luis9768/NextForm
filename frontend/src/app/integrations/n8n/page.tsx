@@ -347,7 +347,7 @@ export default function N8nIntegrationPage() {
                   </p>
                   <div className="pt-1">
                     <Link
-                      href={`/calls/${createdCall.id}/evaluate`}
+                      href={`/analysts/${createdCall.analyst.id}?callId=${createdCall.id}`}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 text-zinc-950 text-xs font-bold"
                     >
                       <span>Avaliar Esta Ligação Agora</span>

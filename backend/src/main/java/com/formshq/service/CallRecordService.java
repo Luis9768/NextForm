@@ -388,11 +388,19 @@ public class CallRecordService {
     ) {
         final String targetUrl = (audioEvaluationWebhookUrl != null && !audioEvaluationWebhookUrl.isBlank())
                 ? audioEvaluationWebhookUrl.trim()
-                : (customerWebhookUrl != null ? customerWebhookUrl.trim() : "");
+                : "";
         final String sacTargetUrl = (sacRetencaoWebhookUrl != null && !sacRetencaoWebhookUrl.isBlank())
                 ? sacRetencaoWebhookUrl.trim()
                 : "";
         if (targetUrl.isEmpty() && sacTargetUrl.isEmpty()) {
+            final UUID missingUrlCallUuid = callRecord.getId();
+            callRecordRepository.findById(missingUrlCallUuid).ifPresent(cr -> {
+                Map<String, Object> m = new LinkedHashMap<>(cr.getMetadata() != null ? cr.getMetadata() : Map.of());
+                m.put("aiWebhookStatus", "ERROR");
+                m.put("aiWebhookError", "Variável de ambiente do webhook de avaliação de áudio (AUDIO_EVALUATION_WEBHOOK_URL / SAC_RETENCAO_WEBHOOK_URL) não configurada.");
+                cr.setMetadata(m);
+                callRecordRepository.save(cr);
+            });
             return;
         }
 
@@ -532,6 +540,13 @@ public class CallRecordService {
                     : targetUrl;
 
             if (effectiveWebhookBaseUrl.isEmpty()) {
+                callRecordRepository.findById(callUuid).ifPresent(cr -> {
+                    Map<String, Object> m = new LinkedHashMap<>(cr.getMetadata() != null ? cr.getMetadata() : Map.of());
+                    m.put("aiWebhookStatus", "ERROR");
+                    m.put("aiWebhookError", "Variável de ambiente do webhook de avaliação de áudio não configurada para o setor " + sectorStr + ".");
+                    cr.setMetadata(m);
+                    callRecordRepository.save(cr);
+                });
                 return;
             }
 
