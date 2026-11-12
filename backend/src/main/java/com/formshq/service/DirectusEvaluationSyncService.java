@@ -108,13 +108,42 @@ public class DirectusEvaluationSyncService {
 
     private static final Set<String> PURGED_TEST_CALL_CODES = Set.of(
             "call_838747",
-            "call_873023"
+            "call_873023",
+            "call_937761",
+            "call_647720",
+            "call_814457",
+            "call_499063",
+            "call_264377",
+            "call_607413",
+            "call_445301",
+            "call_738049",
+            "call_304369",
+            "call_772014",
+            "call_798123",
+            "call_695083",
+            "call_881168"
     );
+
+    private boolean isJunkOrSyntheticAnalyst(User u) {
+        if (u == null) return false;
+        String name = u.getName() != null ? u.getName().trim().toLowerCase() : "";
+        String email = u.getEmail() != null ? u.getEmail().trim().toLowerCase() : "";
+        return name.startsWith("analista directus")
+                || name.startsWith("operador #")
+                || "luigi aqui".equals(name)
+                || "luiz jaquedatinh".equals(name)
+                || "matheus".equals(name)
+                || "miria".equals(name)
+                || email.startsWith("analista.directus")
+                || email.startsWith("operador.")
+                || email.endsWith("@empresa.com")
+                || email.endsWith("@directus.empresa.com");
+    }
 
     private boolean isCorruptedNov5CallRecord(CallRecord cr) {
         if (cr == null) return false;
         String extId = cr.getExternalCallId() != null ? cr.getExternalCallId().trim().replace("#", "").toLowerCase() : "";
-        if (PURGED_TEST_CALL_CODES.contains(extId)) {
+        if (PURGED_TEST_CALL_CODES.contains(extId) || isJunkOrSyntheticAnalyst(cr.getAnalyst())) {
             return true;
         }
         String callDateStr = cr.getCallDate() != null ? cr.getCallDate().toString() : "";
@@ -284,6 +313,24 @@ public class DirectusEvaluationSyncService {
             }
         }
         customerRepository.flush();
+
+        // Remove contas de analistas sintéticas/sujeira criadas por regex ou placeholders
+        for (SectorTransitionLog logItem : sectorTransitionLogRepository.findAll()) {
+            if (isJunkOrSyntheticAnalyst(logItem.getAnalyst()) || isJunkOrSyntheticAnalyst(logItem.getChangedBy())) {
+                sectorTransitionLogRepository.delete(logItem);
+            }
+        }
+        sectorTransitionLogRepository.flush();
+
+        for (User u : userRepository.findAll()) {
+            if (isJunkOrSyntheticAnalyst(u)) {
+                try {
+                    userRepository.delete(u);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        userRepository.flush();
     }
 
     /**
@@ -1019,20 +1066,21 @@ public class DirectusEvaluationSyncService {
                 metadata.put("aiWebhookStatus", "COMPLETED");
 
                 User evaluator = resolveOrProvisionEvaluator(item.get("user_created"), targetSector, fallbackEvaluator);
-                User analyst = resolveOrProvisionAnalyst(
-                        item.get("Operador"),
-                        transcricao,
-                        targetSector,
-                        evaluator,
-                        provisionedAnalysts,
-                        cachedUsers
-                );
 
                 if (existingCallOpt.isPresent()) {
                     CallRecord existingCall = existingCallOpt.get();
-                    if ((targetOverride == null || existingCall.getAnalyst() == null)
-                            && (item.get("Operador") != null || transcricao != null)) {
-                        existingCall.setAnalyst(analyst);
+                    if (existingCall.getAnalyst() == null) {
+                        User resolved = resolveOrProvisionAnalyst(
+                                item.get("Operador"),
+                                transcricao,
+                                targetSector,
+                                evaluator,
+                                provisionedAnalysts,
+                                cachedUsers
+                        );
+                        if (resolved != null) {
+                            existingCall.setAnalyst(resolved);
+                        }
                     }
                     existingCall.setCustomer(customer);
                     existingCall.setCustomerIdentifier(customer.getPhone());
@@ -1101,6 +1149,19 @@ public class DirectusEvaluationSyncService {
                     callRecordRepository.save(existingCall);
                     importedCount++;
                     importedCodes.add(existingCall.getExternalCallId());
+                    continue;
+                }
+
+                User analyst = resolveOrProvisionAnalyst(
+                        item.get("Operador"),
+                        transcricao,
+                        targetSector,
+                        evaluator,
+                        provisionedAnalysts,
+                        cachedUsers
+                );
+                if (analyst == null) {
+                    skippedDuplicates++;
                     continue;
                 }
 
@@ -1710,22 +1771,6 @@ public class DirectusEvaluationSyncService {
             }
         }
 
-        if ((displayName == null || displayName.isBlank()) && transcricao != null && !transcricao.isBlank()) {
-            java.util.regex.Matcher mFull = ANALYST_INTRO_PATTERN.matcher(transcricao);
-            while (mFull.find()) {
-                String candidate = mFull.group(1).trim();
-                if (!candidate.toLowerCase().endsWith("falo") && !candidate.toLowerCase().endsWith("eu")) {
-                    displayName = formatTitleCase(candidate);
-                }
-            }
-        }
-
-        if ((displayName == null || displayName.isBlank()) && operadorRaw instanceof String opStr && opStr.trim().length() == 36) {
-            String shortCode = opStr.trim().substring(0, 6).toUpperCase();
-            displayName = "Operador #" + shortCode + " (" + sectorName + ")";
-            email = "operador." + shortCode.toLowerCase() + "@headsetbrasil.com";
-        }
-
         if (email != null && !email.isBlank()) {
             String cleanEmail = stripAccents(email.toLowerCase());
             for (User u : cachedUsers) {
@@ -1751,15 +1796,9 @@ public class DirectusEvaluationSyncService {
             }
         }
 
-        if (displayName == null || displayName.isBlank()) {
-            displayName = "Analista Directus (" + sectorName + ")";
-        }
-
-        if (email == null || email.isBlank()) {
-            String slug = stripAccents(displayName.toLowerCase())
-                    .replaceAll("[^a-z0-9]+", ".")
-                    .replaceAll("^\\.|\\.$", "");
-            email = slug + "@headsetbrasil.com";
+        // Nunca cria contas genéricas ("Analista Directus", "Operador #...") ou nomes extraídos apenas por regex sem e-mail oficial do Directus
+        if (email == null || email.isBlank() || displayName == null || displayName.isBlank()) {
+            return null;
         }
 
         final String finalEmail = stripAccents(email.toLowerCase());
